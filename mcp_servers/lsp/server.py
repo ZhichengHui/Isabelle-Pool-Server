@@ -7,11 +7,13 @@ source-size gate — review d2bc679 S3).
 
 from __future__ import annotations
 
+import functools
+import json
 from typing import Any, Awaitable, Callable, TypeVar
 
 from mcp.server.fastmcp import FastMCP
 
-from ..common import ToolNames, make_guard
+from ..common import ToolNames, dump_json, make_guard
 from .config import Config
 from .pool import LspPool
 
@@ -72,9 +74,42 @@ def synced_tool(**kw):
 
     def deco(fn):
         fn.__doc__ = (fn.__doc__ or "").rstrip() + " " + _SYNC_NOTE
-        return mcp.tool(**kw)(_guard(fn))
+
+        @functools.wraps(fn)
+        async def with_running(*args: Any, **kwargs: Any) -> Any:
+            out = await fn(*args, **kwargs)
+            file_path = kwargs.get("file_path", args[0] if args else None)
+            return _attach_still_running(out, file_path)
+
+        return mcp.tool(**kw)(_guard(with_running))
 
     return deco
+
+
+def _attach_still_running(out: Any, file_path: Any) -> Any:
+    """If the file's last sync timed out with commands still running, add them
+    to a JSON-object result as `still_running` (line, kind, running_for_s), so
+    the agent sees which command blocks the check instead of an empty report."""
+    if not isinstance(out, str) or not isinstance(file_path, str):
+        return out
+    binding = pool.peek_binding(file_path)
+    running = pool.running_commands(binding) if binding is not None else []
+    if not running:
+        return out
+    try:
+        result = json.loads(out)
+    except ValueError:
+        return out
+    if not isinstance(result, dict):
+        return out
+    result["still_running"] = running
+    result["still_running_note"] = (
+        f"The last check of this file stopped after {Config.LOAD_TIMEOUT:.0f} s because these "
+        "commands were still running; the results for them and for the commands after them "
+        "are missing or stale. A command that keeps running (e.g. metis or auto that does not "
+        "terminate) blocks every check of the file until it is changed."
+    )
+    return dump_json(result)
 
 
 async def _bound_synced(file_path: str):

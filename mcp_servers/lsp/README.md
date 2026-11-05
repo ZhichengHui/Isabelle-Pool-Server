@@ -19,6 +19,14 @@ since the last sync, the new text is pushed via `load_document(report=true)`
 (the lean-lsp-mcp `reload_from_disk` analog). If the server evicted the session
 (404), the binding is recreated transparently and the file reloaded.
 
+A load waits until every command is processed, at most `..._LOAD_TIMEOUT`. When it
+times out, every file-scoped tool result that is a JSON object gets
+`still_running`: the commands still running (line, kind, `running_for_s`, the
+seconds since this MCP first saw the command running) and a note. A command that
+does not terminate blocks every later check of the file until it is changed. The
+next call reloads the file even if it is unchanged, so that it does not answer
+from the report of the timed-out load.
+
 **Security**: like the HTTP API it wraps, this server has NO authentication —
 the streamable-http transport binds 127.0.0.1 by default; deploy behind a
 firewall or SSH tunnel, never expose the port publicly.
@@ -85,7 +93,7 @@ parser (client wrapper: `async_client.parse_theory_header`).
 | `..._FIELD` / `..._TASK_GROUP` | `HOL` / `default` | session image bindings and scratch sessions start on / default heap task group |
 | `..._FIELD_FROM_IMPORTS` | false | start on the image the server's header parse suggests for the file's dotted imports (`suggested_field`: the largest distribution image named) instead of `..._FIELD`; an image the server lacks is built on first use, so prebuild the big ones |
 | `..._HTTP_TIMEOUT` | 600 | httpx timeout (s) |
-| `..._LOAD_TIMEOUT` | 120 | load_document sync budget (s) |
+| `..._LOAD_TIMEOUT` | 30 | load_document sync budget (s); see `still_running` above |
 | `..._ATTEMPT_TIMEOUT` | 180 | per-candidate/run_code budget (s) |
 | `..._MAX_PARALLEL` | 4 | multi_attempt fan-out cap |
 | `..._SCRATCH_POOL_SIZE` | 4 | warm scratch sessions per context |

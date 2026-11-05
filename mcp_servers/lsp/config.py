@@ -25,7 +25,7 @@ class Config:
     # httpx timeout for the underlying client (must exceed load/build budgets).
     HTTP_TIMEOUT: float = env_float(_P, "HTTP_TIMEOUT", 600.0)
     # Wall budget (s) for load_document syncs and per-candidate attempt verification.
-    LOAD_TIMEOUT: float = env_float(_P, "LOAD_TIMEOUT", 120.0)
+    LOAD_TIMEOUT: float = env_float(_P, "LOAD_TIMEOUT", 30.0)
     ATTEMPT_TIMEOUT: float = env_float(_P, "ATTEMPT_TIMEOUT", 180.0)
 
     # Concurrency cap for multi_attempt fan-out (bounded by the server pool).

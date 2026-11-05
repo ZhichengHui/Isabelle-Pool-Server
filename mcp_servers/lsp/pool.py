@@ -98,6 +98,11 @@ class FileBinding:
     heap_session: Optional[str] = None
     cached_text: Optional[str] = None
     last_report: Optional[Dict[str, Any]] = None
+    # (node_line, kind) of each command the last report shows `running` -> the
+    # monotonic time of the load in which this MCP first saw it running (a
+    # lower bound of when it started: PIDE keeps an unchanged command running
+    # across incremental syncs).
+    running_since: Dict[Tuple[Any, Any], float] = field(default_factory=dict)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
@@ -248,6 +253,10 @@ class LspPool(GymClientMixin):
         """Re-read the file from disk; if changed vs the cache, push it via
         load_document(report=true). Returns True if a reload happened.
 
+        A file whose last load timed out is loaded again even if unchanged: the
+        retained report is the state at the timeout, and the commands then
+        running may have finished since.
+
         On 404 (session evicted/closed server-side) the binding is recreated
         once and the load retried. Raises FileNotFoundError for a missing file.
         """
@@ -257,8 +266,9 @@ class LspPool(GymClientMixin):
         with open(canon, encoding="utf-8") as f:
             text = f.read()
         async with binding.lock:
-            if text == binding.cached_text:
+            if text == binding.cached_text and not (binding.last_report or {}).get("timed_out"):
                 return False
+            started = time.monotonic()
             c = await self.client()
             try:
                 result = await c.load_document(
@@ -281,7 +291,31 @@ class LspPool(GymClientMixin):
                 )
             binding.cached_text = text
             binding.last_report = result.get("report") or {}
+            running = {
+                (cmd.get("node_line"), cmd.get("kind"))
+                for cmd in binding.last_report.get("commands") or []
+                if cmd.get("status") == "running"
+            }
+            binding.running_since = {
+                key: binding.running_since.get(key, started) for key in running
+            }
             return True
+
+    def running_commands(self, binding: FileBinding) -> List[Dict[str, Any]]:
+        """The commands the last report shows `running`, if that load timed out:
+        line, kind and the seconds since this MCP first saw each running."""
+        rep = binding.last_report or {}
+        if not rep.get("timed_out"):
+            return []
+        now = time.monotonic()
+        out = []
+        for cmd in rep.get("commands") or []:
+            if cmd.get("status") != "running":
+                continue
+            since = binding.running_since.get((cmd.get("node_line"), cmd.get("kind")), now)
+            out.append({"line": cmd.get("line"), "kind": cmd.get("kind"),
+                        "running_for_s": round(now - since)})
+        return out
 
     async def call(self, binding: FileBinding, fn, *args, **kwargs):
         """Run a client call against a binding's session, rebinding once on 404."""

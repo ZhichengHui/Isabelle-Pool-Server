@@ -33,6 +33,7 @@ class FakeClient:
         self.dirty = set()  # sessions that have loaded a document (command history)
         self._counter = 0
         self.fail_next_load_404 = False
+        self.next_reports = []  # reports load_document returns, in order (then the default)
         self.last_memory_state = "ok"
         self.fail_create_503 = False  # create_session raises a memory 503
 
@@ -123,6 +124,8 @@ class FakeClient:
             )
         self.loads.append({"session_id": session_id, "text": text, "report": report})
         self.dirty.add(session_id)
+        if self.next_reports:
+            return {"success": True, "report": self.next_reports.pop(0)}
         return {"success": True, "report": {"success": True, "commands": []}}
 
     async def goals_at_line(self, session_id, line, lease_id=None):
@@ -682,4 +685,70 @@ def test_scratch_sessions_start_on_the_same_image(tmp_path, monkeypatch):
     assert fake.acquired[0]["field"] == "HOL-Computational_Algebra"
     scratch = [c["field"] for c in fake.created if (c["label"] or "").startswith("scratch")]
     assert scratch == ["HOL-Computational_Algebra", "HOL-Analysis", "HOL"]
+
+
+def _timed_out_report(*running):
+    """A load report that timed out with the given (node_line, kind) commands running."""
+    cmds = [{"line": 3, "node_line": 3, "kind": "lemma", "status": "ok", "messages": []}]
+    cmds += [{"line": nl, "node_line": nl, "kind": k, "status": "running", "messages": []}
+             for nl, k in running]
+    return {"success": False, "timed_out": True, "commands": cmds}
+
+
+def test_timed_out_load_lists_running_commands_and_reloads_unchanged_file(tmp_path, monkeypatch):
+    f = tmp_path / "T.thy"
+    f.write_text("theory T imports Main begin\nlemma t: True by (metis foo)\nend\n")
+    pool = _pool_with_fake()
+    clock = [100.0]
+    monkeypatch.setattr("mcp_servers.lsp.pool.time.monotonic", lambda: clock[0])
+    pool._client.next_reports = [_timed_out_report((5, "by")), _timed_out_report((5, "by")),
+                                 {"success": True, "commands": []}]
+
+    async def run():
+        binding = await pool.get_binding(str(f))
+        assert await pool.sync(binding) is True
+        clock[0] = 130.0
+        first = pool.running_commands(binding)
+        # unchanged file, but the last load timed out: reload instead of the stale report
+        assert await pool.sync(binding) is True
+        clock[0] = 160.0
+        second = pool.running_commands(binding)
+        assert await pool.sync(binding) is True  # still timed out before: reload again
+        third = pool.running_commands(binding)
+        assert await pool.sync(binding) is False  # finished and unchanged: no reload
+        return first, second, third, binding
+
+    first, second, third, binding = asyncio.run(run())
+    assert first == [{"line": 5, "kind": "by", "running_for_s": 30}]
+    # the same command keeps its first-seen time across loads
+    assert second == [{"line": 5, "kind": "by", "running_for_s": 60}]
+    assert third == [] and binding.running_since == {}
+    assert len(pool._client.loads) == 3
+
+
+def test_still_running_is_attached_only_after_a_timed_out_load(tmp_path, monkeypatch):
+    pytest.importorskip("mcp", reason="mcp package not installed")
+    from mcp_servers.lsp import server as lsp_server
+
+    f = tmp_path / "T.thy"
+    f.write_text("theory T imports Main begin\nlemma t: True by (metis foo)\nend\n")
+    pool = _pool_with_fake()
+    monkeypatch.setattr(lsp_server, "pool", pool)
+    pool._client.next_reports = [_timed_out_report((5, "by"))]
+
+    async def run():
+        binding = await pool.get_binding(str(f))
+        await pool.sync(binding)
+        return binding
+
+    binding = asyncio.run(run())
+    out = json.loads(lsp_server._attach_still_running('{"messages": []}', str(f)))
+    assert out["messages"] == []
+    assert out["still_running"][0]["line"] == 5 and out["still_running"][0]["kind"] == "by"
+    assert "still_running_note" in out
+    # non-object results and files without a binding are returned unchanged
+    assert lsp_server._attach_still_running('[1, 2]', str(f)) == '[1, 2]'
+    assert lsp_server._attach_still_running('{"a": 1}', str(tmp_path / "Other.thy")) == '{"a": 1}'
+    binding.last_report = {"success": True, "commands": []}
+    assert lsp_server._attach_still_running('{"a": 1}', str(f)) == '{"a": 1}'
 
