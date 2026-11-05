@@ -20,12 +20,14 @@ since the last sync, the new text is pushed via `load_document(report=true)`
 (404), the binding is recreated transparently and the file reloaded.
 
 A load waits until every command is processed, at most `..._LOAD_TIMEOUT`. When it
-times out, every file-scoped tool result that is a JSON object gets
-`still_running`: the commands still running (line, kind, `running_for_s`, the
-seconds since this MCP first saw the command running) and a note. A command that
-does not terminate blocks every later check of the file until it is changed. The
-next call reloads the file even if it is unchanged, so that it does not answer
-from the report of the timed-out load.
+times out, the results of `isabelle_open`, `isabelle_sync` and every file-scoped
+tool that are JSON objects get `still_running`: the commands still running (line,
+kind, `running_for_s`, the seconds since this MCP first saw the command running)
+and a note. Their results are missing; other commands may be incomplete (PIDE
+checks later proofs in parallel, so their errors can still appear). A command that
+does not terminate makes every later check of the file wait the full budget until
+it is changed. The next call reloads the file even if it is unchanged, so that it
+does not answer from the report of the timed-out load.
 
 **Security**: like the HTTP API it wraps, this server has NO authentication —
 the streamable-http transport binds 127.0.0.1 by default; deploy behind a

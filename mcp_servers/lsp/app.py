@@ -27,7 +27,7 @@ from .pool import attempt_prefix, field_for, header_fields, header_text
 
 from . import fill_tools  # noqa: F401  (registers the fill_sorries tools on `mcp`)
 from . import memory_tools  # noqa: F401  (registers the memory tools on `mcp`)
-from .server import TOOLS, _bound_synced, mcp, pool, synced_tool, tool  # noqa: F401
+from .server import TOOLS, _attach_still_running, _bound_synced, mcp, pool, synced_tool, tool  # noqa: F401
 
 
 # ------------------------------------------------------------------ lifecycle
@@ -49,7 +49,7 @@ async def isabelle_open(
     binding = await pool.get_binding(file_path, task_group, heap_session, label)
     reloaded = await pool.sync(binding)
     rep = binding.last_report or {}
-    return _j({
+    return _attach_still_running(_j({
         "opened": binding.file_path,
         "task_group": binding.task_group,
         "heap_session": binding.heap_session,
@@ -58,7 +58,7 @@ async def isabelle_open(
         "proof_open": rep.get("proof_open"),
         "commands": len(rep.get("commands", []) or []),
         "error": rep.get("error"),
-    })
+    }), file_path)
 
 
 @tool()
@@ -81,14 +81,14 @@ async def isabelle_sync(file_path: str) -> str:
     binding = await pool.get_binding(file_path)
     reloaded = await pool.sync(binding)
     rep = binding.last_report or {}
-    return _j({
+    return _attach_still_running(_j({
         "synced": reloaded,
         "success": rep.get("success"),
         "proof_open": rep.get("proof_open"),
         "error": rep.get("error"),
         "stuck_line": rep.get("timed_out") and rep.get("commands") and
             next((c.get("line") for c in rep.get("commands", []) if c.get("status") == "running"), None),
-    })
+    }), file_path)
 
 
 # ------------------------------------------------------------- read-only tools

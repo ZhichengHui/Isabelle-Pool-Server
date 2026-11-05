@@ -105,9 +105,9 @@ def _attach_still_running(out: Any, file_path: Any) -> Any:
     result["still_running"] = running
     result["still_running_note"] = (
         f"The last check of this file stopped after {Config.LOAD_TIMEOUT:.0f} s because these "
-        "commands were still running; the results for them and for the commands after them "
-        "are missing or stale. A command that keeps running (e.g. metis or auto that does not "
-        "terminate) blocks every check of the file until it is changed."
+        "commands were still running: their results are missing, and the results of other "
+        "commands may be incomplete. A command that keeps running (e.g. metis or auto that "
+        "does not terminate) makes every check of the file wait this long until it is changed."
     )
     return dump_json(result)
 
