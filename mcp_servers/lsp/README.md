@@ -11,6 +11,15 @@ container, port 8000).
 **Positions everywhere are 1-based line/column, UTF-16 columns** (editor/LSP
 convention, matching the server's report `range` fields).
 
+## Server instructions and upfront tools
+
+The server sends MCP server instructions (`_INSTRUCTIONS` in `server.py`): what the server
+does and the tools behind its key capabilities (incremental checking, `isabelle_multi_attempt`,
+sledgehammer and `isabelle_fill_sorries`, `still_running`, inspection). Claude Code's tool
+search loads only tool names and server instructions at session start. `isabelle_open`,
+`isabelle_diagnostic_messages` and `isabelle_goal` carry `_meta` `anthropic/alwaysLoad`, so
+Claude Code loads them upfront; the other tools stay deferred.
+
 ## Sync model (copied buffer)
 
 The MCP never writes files. Per open file it keeps a text cache; **every

@@ -97,3 +97,25 @@ def test_verify_chunk_docstring_states_the_proved_rule():
     """`success=True ≠ proved` is the one invariant agents must never lose (2.4/2.8)."""
     desc = next(t.description for t in _tools(stepwise_app.mcp) if t.name == "verify_chunk")
     assert "proof_open" in desc and "used_sorry" in desc
+
+
+def test_lsp_server_instructions_name_the_key_tools():
+    """Under Claude Code's tool search only tool names and server instructions load at session
+    start, and instructions past 4,096 characters are cut: the instructions must exist, fit, and
+    name the tools behind the server's key capabilities."""
+    text = lsp_app.mcp._mcp_server.create_initialization_options().instructions
+    assert text and len(text) < 4096
+    for name in ("isabelle_open", "isabelle_diagnostic_messages", "isabelle_multi_attempt",
+                 "isabelle_sledgehammer", "isabelle_fill_sorries", "still_running"):
+        assert name in text, name
+    named = {t.name for t in _tools(lsp_app.mcp)}
+    for word in text.replace(",", " ").replace(")", " ").replace("(", " ").split():
+        if word.startswith("isabelle_"):
+            assert word in named, f"server instructions name an unknown tool: {word}"
+
+
+def test_lsp_core_tools_load_upfront():
+    """The tools used on nearly every turn carry `anthropic/alwaysLoad` so that Claude Code loads
+    them with the session even when it defers MCP tools; the others stay deferred."""
+    upfront = {t.name for t in _tools(lsp_app.mcp) if (t.meta or {}).get("anthropic/alwaysLoad")}
+    assert upfront == {"isabelle_open", "isabelle_diagnostic_messages", "isabelle_goal"}

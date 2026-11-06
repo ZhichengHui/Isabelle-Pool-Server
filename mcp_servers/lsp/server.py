@@ -17,8 +17,31 @@ from ..common import ToolNames, dump_json, make_guard
 from .config import Config
 from .pool import LspPool
 
-mcp = FastMCP("isabelle-pool-server-lsp", host=Config.HOST, port=Config.PORT)
+_INSTRUCTIONS = f"""\
+Isabelle Pool Server: checks Isabelle/HOL theory (.thy) files on warm Isabelle sessions. Use these \
+tools to check proofs, read goals and find proofs while you edit a theory file. The file stays on \
+disk: edit it with your own file tools; every tool that takes file_path re-reads the file and \
+re-checks it before answering.
+
+Key capabilities:
+- Incremental checking: isabelle_open binds a file once; after an edit, isabelle_diagnostic_messages, \
+isabelle_goal and isabelle_proof_state re-check only from the first changed command on, which is much \
+faster than a batch build of the whole theory.
+- Trying proofs without editing the file: isabelle_multi_attempt checks several candidate proofs at \
+one line in parallel, each on its own scratch session with its own time limit.
+- Finding proofs: isabelle_sledgehammer runs sledgehammer on one goal; isabelle_fill_sorries runs it \
+on every sorry of the file in the background.
+- Blocked checks: a check waits at most {Config.LOAD_TIMEOUT:.0f} s; if commands are still running \
+then, the result carries still_running with their lines.
+- Inspection: isabelle_query (thm, term, find_theorems, ...), local and global facts, definitions, \
+hover information; checkpoints; memory tools (isabelle_memory_status, isabelle_release_idle)."""
+
+mcp = FastMCP("isabelle-pool-server-lsp", instructions=_INSTRUCTIONS, host=Config.HOST, port=Config.PORT)
 pool = LspPool()
+
+# `_meta` of the tools that Claude Code should load upfront even when it defers MCP tools behind
+# tool search: the ones used on nearly every turn of editing a theory.
+ALWAYS_LOAD = {"anthropic/alwaysLoad": True}
 
 # Memory protocol (plan §2.C, owner decisions D3/D4): the server reports FACTS
 # (503 bodies with an `error` key, the X-Memory-State header, /api/v1/memory);

@@ -27,13 +27,13 @@ from .pool import attempt_prefix, field_for, header_fields, header_text
 
 from . import fill_tools  # noqa: F401  (registers the fill_sorries tools on `mcp`)
 from . import memory_tools  # noqa: F401  (registers the memory tools on `mcp`)
-from .server import TOOLS, _attach_still_running, _bound_synced, mcp, pool, synced_tool, tool  # noqa: F401
+from .server import ALWAYS_LOAD, TOOLS, _attach_still_running, _bound_synced, mcp, pool, synced_tool, tool  # noqa: F401
 
 
 # ------------------------------------------------------------------ lifecycle
 
 
-@tool()
+@tool(meta=ALWAYS_LOAD)
 async def isabelle_open(
     file_path: str, task_group: Optional[str] = None,
     heap_session: Optional[str] = None, label: Optional[str] = None,
@@ -93,7 +93,7 @@ async def isabelle_sync(file_path: str) -> str:
 
 # ------------------------------------------------------------- read-only tools
 
-@synced_tool()
+@synced_tool(meta=ALWAYS_LOAD)
 async def isabelle_diagnostic_messages(file_path: str, severity: Optional[str] = None) -> str:
     """Per-command diagnostics of the file as the prover sees it: for every
     command with an error/warning message — its line, column range, kind,
@@ -133,7 +133,7 @@ async def isabelle_diagnostic_messages(file_path: str, severity: Optional[str] =
     return _j(result)
 
 
-@synced_tool()
+@synced_tool(meta=ALWAYS_LOAD)
 async def isabelle_goal(file_path: str, line: int) -> str:
     """Goal state before/after the command containing `line`:
     {found, command, goals_before, goals_after}. The right call before writing
