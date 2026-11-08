@@ -25,12 +25,26 @@ object Server_Utils {
       f(ctx)
     }
 
+  /** Server.init registers the server in the user's servers.db (SQLite). Session backends are
+   *  created concurrently (ISABELLE_PARALLEL_SESSION_CREATE), and concurrent registrations
+   *  fail with SQLITE_BUSY: serialize them in this JVM. Another process using the same
+   *  database (a second pool server) can still collide, so a failed attempt is retried. */
+  private val init_lock = new Object
+
   def start_server(): (Server.Info, Server) = {
     def attempt_start_server(): Option[(Server.Info, Server)] = {
       val server_name = UUID.random_string()
       // Isabelle 2026: Server.init takes a mandatory Logger as its first arg.
-      val (server_info, server_opt) = Server.init(new Console_Logger(), name = server_name)
-      server_opt.map(server => (server_info, server))
+      try {
+        val (server_info, server_opt) =
+          init_lock.synchronized { Server.init(new Console_Logger(), name = server_name) }
+        server_opt.map(server => (server_info, server))
+      } catch {
+        case exn: java.sql.SQLException =>
+          Output.warning(s"Server.init failed (${exn.getMessage}); retrying")
+          Time.seconds(0.5).sleep()
+          None
+      }
     }
 
     def retry_attempt_start_server(max_retries: Int): Option[(Server.Info, Server)] =
