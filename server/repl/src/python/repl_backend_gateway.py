@@ -142,7 +142,7 @@ class ReplBackendGatewayProcess:
             raise RuntimeError(
                 "Scala REPL gateway process failed to start (stdout is None)."
             )
-        port = int(self.process.stdout.readline().strip())
+        port = self._read_port(self.process.stdout)
         # Keep the pipe open and pump the JVM's remaining stdout into the
         # durable log — closing it here (the old behavior) silently discarded
         # everything the JVM printed after startup.
@@ -155,6 +155,20 @@ class ReplBackendGatewayProcess:
             gateway_parameters=GatewayParameters(
                 port=port, read_timeout=Repl.PY4J_READ_TIMEOUT
             )
+        )
+
+    def _read_port(self, stream) -> int:
+        """The Py4J port: the first all-digit line of the JVM's stdout. The JVM can
+        print other lines before it, e.g. a hsperfdata warning when its pid collides
+        with a JVM in another pid namespace; those go to the log instead of being
+        parsed as the port (that used to fail the server start)."""
+        for line in stream:
+            text = line.strip()
+            if text.isdigit():
+                return int(text)
+            self._jvm_log.write(line)
+        raise RuntimeError(
+            "Scala REPL gateway exited before printing its port; see gateway-jvm.log."
         )
 
     def _pump_stdout(self, stream) -> None:
