@@ -252,6 +252,11 @@ ISABELLE_FILL_SAMPLE_S=2           # ATP memory attribution sample interval (s) 
 # scratch sessions start on the image the server's parse suggests for the dotted imports, suggested_field;
 # an image the server lacks is built on first use)
 
+# Concurrent session creation (server/app/core/config.py, server/app/services/session_manager_helpers.py)
+ISABELLE_PARALLEL_SESSION_CREATE=true  # Default true: the gateway lock is held only to read the gateway, so N
+                                   # sessions start concurrently (4 at once: HOL 17.7 s -> 8.2 s, AutoCorrode
+                                   # 101.8 s -> 42.5 s). false restores one-at-a-time creation.
+
 # Per-session parallel proof checking (server/repl/src/main/scala/repl/session_manager.scala, read by Scala via sys.env)
 ISABELLE_PARALLEL_PROOFS=2         # Isabelle parallel_proofs per session (default 2): 0=sequential,
                                    # 1=fork top-level proofs, 2=also fork nested have/show bodies.

@@ -18,8 +18,8 @@ class Server:
     INITIAL_SESSIONS: Final = int(os.getenv("ISABELLE_INITIAL_SESSIONS", "3"))
     # Session backends are created concurrently: the global gateway lock is held only to
     # read the gateway, not for the whole Py4J factory call (each ReplBackend starts its own
-    # Isabelle session and shares no state). False restores one-at-a-time creation.
-    PARALLEL_SESSION_CREATE: Final = os.getenv("ISABELLE_PARALLEL_SESSION_CREATE", "false").lower() in {
+    # Isabelle session and shares no state). Default true; false restores one-at-a-time creation.
+    PARALLEL_SESSION_CREATE: Final = os.getenv("ISABELLE_PARALLEL_SESSION_CREATE", "true").lower() in {
         "1", "true", "yes", "on",
     }
     MAX_CACHE_SIZE: Final = int(os.getenv("ISABELLE_MAX_CACHE_SIZE", "1"))

@@ -85,7 +85,8 @@ container runs that version. Then:
 
 - **Tune `.env`** if needed — `ISABELLE_POOL_SIZE` (sessions, ~4 GB each),
   `ISABELLE_INITIAL_SESSIONS`, `ISABELLE_MEMORY_PRESSURE_THRESHOLD`, `ISABELLE_ML_MAXHEAP_MB`,
-  `ISABELLE_ADMIN_TOKEN`; apply with `docker compose up -d --force-recreate isabelle-pool-server`.
+  `ISABELLE_ADMIN_TOKEN`, `ISABELLE_PARALLEL_SESSION_CREATE` (default `true`: sessions are created
+  concurrently; `false` creates them one at a time); apply with `docker compose up -d --force-recreate isabelle-pool-server`.
 - **Operate:** `docker compose logs -f isabelle-pool-server` (also `logs/server.log`),
   `docker compose stop isabelle-pool-server`, upgrade with `git pull && ./deploy/setup.sh`;
   a new Isabelle: `./deploy/setup.sh --isabelle-version <V>` (heaps are per version, rebuild
