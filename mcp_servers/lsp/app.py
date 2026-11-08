@@ -372,7 +372,7 @@ async def isabelle_multi_attempt(
                 return {"candidate": candidate, "error": f"{type(e).__name__}: {e}"}
 
     results = await asyncio.gather(*(try_one(cand) for cand in candidates))
-    scratch_spare.after_attempt(pool, key, text, len(candidates))  # warm, loaded spares
+    scratch_spare.ensure(pool, key, text)  # top the warm, loaded spares up again
     return _j(list(results))
 
 

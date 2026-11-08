@@ -118,7 +118,6 @@ class LspPool(GymClientMixin):
         self._scratch_counts: Dict[Tuple, int] = {}
         self._scratch_lock = asyncio.Lock()
         self._spare_pending: dict = {}  # scratch_spare.py: context -> spares in preparation
-        self._last_fanout: int = 1  # scratch_spare.py: candidates of the last multi_attempt
         self._spare_tasks: set = set()  # scratch_spare.py: its background tasks
         self._retire_tasks: set = set()  # deferred closes of busy dropped sessions
         # What this process holds on the server (bindings + scratch; session and

@@ -83,14 +83,14 @@ task_group/heap/imports/field, `ISABELLE_MCP_LSP_SCRATCH_POOL_SIZE`):
 | `isabelle_multi_attempt(file_path, line, candidates, timeout?)` | File prefix before `line` + each candidate, verified concurrently on scratch sessions (bounded by `ISABELLE_MCP_LSP_MAX_PARALLEL`); per-candidate success/proof_open/failed commands (candidate-relative lines) |
 | `isabelle_run_code(chunk, imports?, task_group?, heap_session?, timeout?)` | Independent snippet on a scratch session (own `theory` header or body of a scratch theory importing `imports`, default Main) |
 
-Spare scratch sessions (`scratch_spare.py`, `ISABELLE_MCP_LSP_SCRATCH_SPARE`, default 4 = the
-most per context, 0 = off): after a file is first bound, and after each `isabelle_multi_attempt`,
-the MCP prepares in the background idle scratch sessions for the file's context, already loaded
-with the file's text — as many as the last multi_attempt had candidates (1 before the first),
-capped by `..._MAX_PARALLEL` and `..._SCRATCH_POOL_SIZE`. The candidates of a multi_attempt run in
-parallel, so the call is as slow as its slowest candidate: spares help only if every candidate
-finds one (measured on an AutoCorrode file: 1 candidate with a spare 0.4 s, without 40 s; 2
-candidates with only 1 spare still 39 s). A candidate on a spare neither waits for a new session
+Spare scratch sessions (`scratch_spare.py`, `ISABELLE_MCP_LSP_SCRATCH_SPARE`, default 4, 0 = off):
+after a file is first bound, and again after each `isabelle_multi_attempt`, the MCP prepares in
+the background min(`..._SCRATCH_SPARE`, `..._MAX_PARALLEL`) idle scratch sessions for the file's
+context (within `..._SCRATCH_POOL_SIZE`), already loaded with the file's text. The candidates of
+a multi_attempt run in parallel, so the call is as slow as its slowest candidate: spares help only
+if every candidate finds one, which is why as many are kept as candidates can run at once
+(measured on an AutoCorrode file: 1 candidate with a spare 0.4 s, without 40 s; 2 candidates with
+only 1 spare still 39 s). A candidate on a spare neither waits for a new session
 nor checks the prefix from the start (its load takes the server's incremental path). The context
 comes from the file's own header, so nothing is configured per heap. Each spare is a held Isabelle
 session (memory; the memory reminder closes idle ones first). A refused or failed preparation
@@ -121,7 +121,7 @@ parser (client wrapper: `async_client.parse_theory_header`).
 | `..._ATTEMPT_TIMEOUT` | 180 | per-candidate/run_code budget (s) |
 | `..._MAX_PARALLEL` | 4 | multi_attempt fan-out cap |
 | `..._SCRATCH_POOL_SIZE` | 4 | warm scratch sessions per context |
-| `..._SCRATCH_SPARE` | 4 | most idle scratch sessions kept ready per context, loaded with the file; follows the last multi_attempt's candidate count (0 = off) |
+| `..._SCRATCH_SPARE` | 4 | idle scratch sessions kept ready per context, loaded with the file: min(this, `MAX_PARALLEL`) (0 = off) |
 | `..._CLOSE_DESTROYS` | false | `isabelle_close` destroys (teardown) instead of warm-releasing |
 | `..._FILL_TIMEOUT_S` / `..._FILL_MAX_TOTAL_S` | 30 / 600 | fill_sorries: sledgehammer budget per `sorry` / wall budget per job (server defaults `ISABELLE_FILL_*`) |
 | `..._FILL_PATIENCE_S` / `..._FILL_POLL_S` | 240 / 3 | how long `isabelle_fill_sorries` waits before returning `continuing: true` (keep ≤ the MCP client's tool timeout − 60) / poll interval |

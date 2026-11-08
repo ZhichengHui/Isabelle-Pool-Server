@@ -26,7 +26,7 @@ def _fresh(monkeypatch, spare=1):
     # left in it would serve later tests' calls (which then never reach their fake client)
     fake = FakeClient()
     for name, value in [("_bindings", {}), ("_scratch", {}), ("_scratch_counts", {}),
-                        ("_spare_pending", {}), ("_last_fanout", 1), ("_client", fake)]:
+                        ("_spare_pending", {}), ("_client", fake)]:
         monkeypatch.setattr(pool, name, value)
     return lsp_app, pool, fake
 
@@ -107,43 +107,44 @@ def test_memory_refusal_means_no_spare(tmp_path, monkeypatch):
     assert all(q.qsize() == 0 for q in pool._scratch.values())
 
 
-def test_spares_follow_the_last_fan_out(tmp_path, monkeypatch):
-    """Candidates run in parallel, so a spare helps only if each finds one: after a
-    multi_attempt with 2 candidates, 2 spares are kept; a file bound later starts with 2."""
+def test_first_multi_attempt_finds_a_spare_per_candidate(tmp_path, monkeypatch):
+    """Candidates run in parallel, so a spare helps only if each finds one: open prepares
+    min(SCRATCH_SPARE, MAX_PARALLEL) distinct, loaded spares, and the first multi_attempt with
+    that many candidates creates no session."""
     lsp_app, pool, fake = _fresh(monkeypatch, spare=4)
+    monkeypatch.setattr(Config, "MAX_PARALLEL", 4)
     f = tmp_path / "Fan.thy"
     f.write_text(TEXT)
-    g = tmp_path / "Fan2.thy"
-    # other imports: another scratch context (same imports would share Fan's spares)
-    g.write_text(TEXT.replace("theory Fan imports Main", 'theory Fan2 imports "HOL-Library.Multiset"'))
+    cands = [f"lemma c{i}: True by simp" for i in range(4)]
 
     async def run():
         await lsp_app.isabelle_open(file_path=str(f))
         await _settle(pool)
-        await lsp_app.isabelle_multi_attempt(
-            file_path=str(f), line=2,
-            candidates=["lemma b: True by simp", "lemma c: True by auto"])
+        (queue,) = pool._scratch.values()
+        spares = sorted(sid for sid, _, _ in queue._queue)
+        before = len(_scratch_created(fake))
+        out = json.loads(await lsp_app.isabelle_multi_attempt(
+            file_path=str(f), line=2, candidates=cands))
+        after = len(_scratch_created(fake))
         await _settle(pool)
-        first = {k: q.qsize() for k, q in pool._scratch.items()}
-        await lsp_app.isabelle_open(file_path=str(g))
-        await _settle(pool)
-        return first, {k: q.qsize() for k, q in pool._scratch.items()}
+        return spares, before, after, out, queue.qsize()
 
-    first, after_g = asyncio.run(run())
-    assert list(first.values()) == [2]
-    assert sorted(after_g.values()) == [2, 2]  # Fan2's own context: 2 spares from the start
+    spares, before, after, out, idle = asyncio.run(run())
+    assert len(set(spares)) == 4 and before == after == 4
+    assert all({"session_id": s, "text": TEXT, "report": True} in fake.loads for s in spares)
+    assert [r["candidate"] for r in out] == cands and idle == 4
 
 
-def test_spares_capped_by_max_parallel(monkeypatch):
-    from mcp_servers.lsp import scratch_spare
-
+def test_spares_capped_by_max_parallel(tmp_path, monkeypatch):
     lsp_app, pool, fake = _fresh(monkeypatch, spare=4)
     monkeypatch.setattr(Config, "MAX_PARALLEL", 2)
-    key = pool.scratch_key("default", None, ["Main"], "HOL")
+    f = tmp_path / "Fan.thy"
+    f.write_text(TEXT)
 
     async def run():
-        scratch_spare.after_attempt(pool, key, TEXT, 5)
+        await lsp_app.isabelle_open(file_path=str(f))
         await _settle(pool)
 
     asyncio.run(run())
-    assert pool._scratch[key].qsize() == 2 and pool._last_fanout == 5
+    assert len(_scratch_created(fake)) == 2
+

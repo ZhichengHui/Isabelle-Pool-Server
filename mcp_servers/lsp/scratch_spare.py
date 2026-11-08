@@ -2,11 +2,12 @@
 file's text, so that isabelle_multi_attempt does not wait for a new Isabelle session (~20 s) and
 its first full check of the file prefix (~20 s).
 
-Spares are prepared in the background, while the agent thinks: one after a file is first bound
-(`schedule_for_binding`), and after each multi_attempt as many as it had candidates (`ensure`),
-because its candidates run in parallel and the call is as slow as its slowest candidate: a spare
-helps only if every candidate finds one. The count is capped by Config.SCRATCH_SPARE (0 disables),
-Config.MAX_PARALLEL and the room left under Config.SCRATCH_POOL_SIZE. The context is the scratch
+Spares are prepared in the background, while the agent thinks: after a file is first bound
+(`schedule_for_binding`) and topped up after each multi_attempt (`ensure`). Each context keeps
+min(Config.SCRATCH_SPARE, Config.MAX_PARALLEL) of them (0 disables), within the room left under
+Config.SCRATCH_POOL_SIZE: the candidates of a multi_attempt run in parallel (at most MAX_PARALLEL
+at once) and the call is as slow as its slowest candidate, so a spare helps only if every
+candidate finds one — also on the first call, before any fan-out is known. The context is the scratch
 key of the file (task group, heap, header imports, field), derived from the file itself, so
 nothing is configured per heap. Because a spare has loaded the file, the next multi_attempt's
 `prefix + candidate` load takes the server's incremental path. Any failure (memory pressure, a
@@ -26,10 +27,10 @@ from .pool import FileBinding, LspPool, field_for, header_fields
 logger = logging.getLogger(__name__)
 
 
-def ensure(pool: LspPool, key: Tuple, text: str, want: int = 1) -> None:
-    """Start preparing spares for `key` with `text` until `want` (capped as described above)
-    are idle or being prepared."""
-    want = min(want, Config.SCRATCH_SPARE, Config.MAX_PARALLEL)
+def ensure(pool: LspPool, key: Tuple, text: str) -> None:
+    """Start preparing spares for `key` with `text` until min(SCRATCH_SPARE, MAX_PARALLEL) are
+    idle or being prepared."""
+    want = min(Config.SCRATCH_SPARE, Config.MAX_PARALLEL)
     if want <= 0 or not text:
         return
     queue = pool._scratch.get(key)
@@ -70,8 +71,7 @@ async def _prepare(pool: LspPool, key: Tuple, text: str, n: int) -> None:
 
 def schedule_for_binding(pool: LspPool, binding: FileBinding) -> None:
     """Once per binding: work out the file's scratch key (header parse, in the background) and
-    start preparing spares for it, as many as the last multi_attempt had candidates (1 before
-    the first one)."""
+    start preparing its spares."""
     if Config.SCRATCH_SPARE <= 0 or binding.spare_scheduled or not binding.cached_text:
         return
     binding.spare_scheduled = True
@@ -86,16 +86,9 @@ def schedule_for_binding(pool: LspPool, binding: FileBinding) -> None:
         except Exception as e:  # noqa: BLE001
             logger.info("scratch spare: no key for %s: %s", binding.file_path, e)
             return
-        ensure(pool, key, text, pool._last_fanout)
+        ensure(pool, key, text)
 
     _spawn(pool, run())
-
-
-def after_attempt(pool: LspPool, key: Tuple, text: str, candidates: int) -> None:
-    """After a multi_attempt with `candidates` candidates: remember the fan-out and keep that
-    many spares ready for the file."""
-    pool._last_fanout = max(1, candidates)
-    ensure(pool, key, text, candidates)
 
 
 def _spawn(pool: LspPool, coro) -> None:
