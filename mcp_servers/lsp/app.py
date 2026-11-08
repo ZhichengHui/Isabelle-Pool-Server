@@ -25,6 +25,7 @@ from ..common import translate_http_error
 from .config import Config
 from .pool import attempt_prefix, field_for, header_fields, header_text
 
+from . import scratch_spare
 from . import fill_tools  # noqa: F401  (registers the fill_sorries tools on `mcp`)
 from . import memory_tools  # noqa: F401  (registers the memory tools on `mcp`)
 from .server import ALWAYS_LOAD, TOOLS, _attach_still_running, _bound_synced, mcp, pool, synced_tool, tool  # noqa: F401
@@ -48,6 +49,7 @@ async def isabelle_open(
     """
     binding = await pool.get_binding(file_path, task_group, heap_session, label)
     reloaded = await pool.sync(binding)
+    scratch_spare.schedule_for_binding(pool, binding)
     rep = binding.last_report or {}
     return _attach_still_running(_j({
         "opened": binding.file_path,
@@ -370,6 +372,7 @@ async def isabelle_multi_attempt(
                 return {"candidate": candidate, "error": f"{type(e).__name__}: {e}"}
 
     results = await asyncio.gather(*(try_one(cand) for cand in candidates))
+    scratch_spare.ensure(pool, key, text)  # a warm, loaded scratch for the next call
     return _j(list(results))
 
 

@@ -83,6 +83,14 @@ task_group/heap/imports/field, `ISABELLE_MCP_LSP_SCRATCH_POOL_SIZE`):
 | `isabelle_multi_attempt(file_path, line, candidates, timeout?)` | File prefix before `line` + each candidate, verified concurrently on scratch sessions (bounded by `ISABELLE_MCP_LSP_MAX_PARALLEL`); per-candidate success/proof_open/failed commands (candidate-relative lines) |
 | `isabelle_run_code(chunk, imports?, task_group?, heap_session?, timeout?)` | Independent snippet on a scratch session (own `theory` header or body of a scratch theory importing `imports`, default Main) |
 
+Spare scratch sessions (`scratch_spare.py`, `ISABELLE_MCP_LSP_SCRATCH_SPARE`, default 1): after a
+file is first bound, and after each `isabelle_multi_attempt`, the MCP prepares in the background
+one idle scratch session for the file's context, already loaded with the file's text. The next
+multi_attempt then neither waits for a new session nor checks the prefix from the start (its load
+takes the server's incremental path). The context comes from the file's own header, so nothing is
+configured per heap. A refused or failed preparation (memory pressure, the pool at its cap) only
+means no spare.
+
 Heap pool:
 | Tool | What it does |
 |---|---|
@@ -108,6 +116,7 @@ parser (client wrapper: `async_client.parse_theory_header`).
 | `..._ATTEMPT_TIMEOUT` | 180 | per-candidate/run_code budget (s) |
 | `..._MAX_PARALLEL` | 4 | multi_attempt fan-out cap |
 | `..._SCRATCH_POOL_SIZE` | 4 | warm scratch sessions per context |
+| `..._SCRATCH_SPARE` | 1 | idle scratch sessions kept ready per context, loaded with the file (0 = off) |
 | `..._CLOSE_DESTROYS` | false | `isabelle_close` destroys (teardown) instead of warm-releasing |
 | `..._FILL_TIMEOUT_S` / `..._FILL_MAX_TOTAL_S` | 30 / 600 | fill_sorries: sledgehammer budget per `sorry` / wall budget per job (server defaults `ISABELLE_FILL_*`) |
 | `..._FILL_PATIENCE_S` / `..._FILL_POLL_S` | 240 / 3 | how long `isabelle_fill_sorries` waits before returning `continuing: true` (keep ≤ the MCP client's tool timeout − 60) / poll interval |

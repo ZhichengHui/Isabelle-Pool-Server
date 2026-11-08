@@ -37,6 +37,10 @@ class Config:
     # (a legitimate wait is one other candidate's verification); expiry raises a
     # clear error instead of hanging forever (Bug 17 / audit MCP-1).
     SCRATCH_WAIT_TIMEOUT: float = env_float(_P, "SCRATCH_WAIT_TIMEOUT", ATTEMPT_TIMEOUT + 60.0)
+    # Idle scratch sessions kept ready per context, already loaded with the file's text
+    # (scratch_spare.py): prepared in the background after a file is bound and after each
+    # multi_attempt, so the next multi_attempt finds a warm, checked session. 0 disables.
+    SCRATCH_SPARE: int = env_int(_P, "SCRATCH_SPARE", 1)
 
     # Warm scratch sessions idle longer than this are closed on the next
     # acquire / reminder (they are leased, so the server never evicts them —

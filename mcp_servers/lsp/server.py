@@ -16,6 +16,7 @@ from mcp.server.fastmcp import FastMCP
 from ..common import ToolNames, dump_json, make_guard
 from .config import Config
 from .pool import LspPool
+from . import scratch_spare
 
 _INSTRUCTIONS = f"""\
 Isabelle Pool Server: checks Isabelle/HOL theory (.thy) files on warm Isabelle sessions. Use these \
@@ -139,4 +140,5 @@ async def _bound_synced(file_path: str):
     """get_binding + sync — the preamble of every file-scoped tool."""
     binding = await pool.get_binding(file_path)
     reloaded = await pool.sync(binding)
+    scratch_spare.schedule_for_binding(pool, binding)
     return binding, reloaded

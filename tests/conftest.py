@@ -25,3 +25,14 @@ def _capture_server_logs(caplog):
         yield
     finally:
         base.removeHandler(caplog.handler)
+
+
+@pytest.fixture(autouse=True)
+def _no_scratch_spares(monkeypatch):
+    """The LSP MCP prepares spare scratch sessions in the background
+    (mcp_servers/lsp/scratch_spare.py); a test that scripts a fake client's
+    responses or counts its sessions would see those extra calls. Off by
+    default; tests/test_mcp_lsp_scratch_spare.py turns it on."""
+    from mcp_servers.lsp.config import Config
+
+    monkeypatch.setattr(Config, "SCRATCH_SPARE", 0)
