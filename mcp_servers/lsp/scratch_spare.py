@@ -1,19 +1,22 @@
-"""Spare scratch sessions: keep Config.SCRATCH_SPARE idle scratch sessions per context ready,
-already loaded with the file's text, so that isabelle_multi_attempt does not wait for a new
-Isabelle session (~20 s) and its first full check of the file prefix (~20 s).
+"""Spare scratch sessions: keep idle scratch sessions per context ready, already loaded with the
+file's text, so that isabelle_multi_attempt does not wait for a new Isabelle session (~20 s) and
+its first full check of the file prefix (~20 s).
 
-A spare is prepared in the background, while the agent thinks: after a file is first bound
-(`schedule_for_binding`) and after each multi_attempt (`ensure`). The context is the scratch key
-of the file (task group, heap, header imports, field), derived from the file itself, so nothing
-is configured per heap. Because the spare has loaded the file, the next multi_attempt's
+Spares are prepared in the background, while the agent thinks: one after a file is first bound
+(`schedule_for_binding`), and after each multi_attempt as many as it had candidates (`ensure`),
+because its candidates run in parallel and the call is as slow as its slowest candidate: a spare
+helps only if every candidate finds one. The count is capped by Config.SCRATCH_SPARE (0 disables),
+Config.MAX_PARALLEL and the room left under Config.SCRATCH_POOL_SIZE. The context is the scratch
+key of the file (task group, heap, header imports, field), derived from the file itself, so
+nothing is configured per heap. Because a spare has loaded the file, the next multi_attempt's
 `prefix + candidate` load takes the server's incremental path. Any failure (memory pressure, a
-pool at its cap, a timeout) only means no spare: the call that needs a scratch session then
-creates one as before.
+pool at its cap, a timeout) only means fewer spares: a candidate without one creates a session.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from typing import Tuple
 
@@ -23,34 +26,52 @@ from .pool import FileBinding, LspPool, field_for, header_fields
 logger = logging.getLogger(__name__)
 
 
-def ensure(pool: LspPool, key: Tuple, text: str) -> None:
-    """Start preparing a spare for `key` with `text` unless enough are idle or being prepared,
-    or the context is at Config.SCRATCH_POOL_SIZE."""
-    if Config.SCRATCH_SPARE <= 0 or not text or key in pool._spare_pending:
+def ensure(pool: LspPool, key: Tuple, text: str, want: int = 1) -> None:
+    """Start preparing spares for `key` with `text` until `want` (capped as described above)
+    are idle or being prepared."""
+    want = min(want, Config.SCRATCH_SPARE, Config.MAX_PARALLEL)
+    if want <= 0 or not text:
         return
     queue = pool._scratch.get(key)
     idle = queue.qsize() if queue is not None else 0
-    if idle >= Config.SCRATCH_SPARE or pool._scratch_counts.get(key, 0) >= Config.SCRATCH_POOL_SIZE:
+    pending = pool._spare_pending.get(key, 0)
+    if idle + pending >= want:
         return
-    pool._spare_pending.add(key)
-    _spawn(pool, _prepare(pool, key, text))
+    # new sessions must fit under the context's session cap
+    creatable = Config.SCRATCH_POOL_SIZE - pool._scratch_counts.get(key, 0) - pending
+    n = min(want - pending, idle + creatable)
+    if n > idle:
+        pool._spare_pending[key] = pending + n
+        _spawn(pool, _prepare(pool, key, text, n))
 
 
-async def _prepare(pool: LspPool, key: Tuple, text: str) -> None:
+async def _prepare(pool: LspPool, key: Tuple, text: str, n: int) -> None:
+    """Hold `n` scratch sessions at once (the idle ones first, then new ones), load the text
+    into all of them, then release them together. Taken one at a time, each acquire would get
+    back the session the previous one had just released, and no new session would be made."""
     try:
-        async with pool.scratch_session(key) as (sid, lease):
+        async with contextlib.AsyncExitStack() as stack:
+            held = [await stack.enter_async_context(pool.scratch_session(key))
+                    for _ in range(n)]
             c = await pool.client()
-            await c.load_document(sid, text, report=True,
-                                  timeout=Config.ATTEMPT_TIMEOUT, lease_id=lease)
-    except Exception as e:  # noqa: BLE001  (no spare is a normal outcome)
-        logger.info("scratch spare not prepared for %s: %s", key, e)
+            await asyncio.gather(*(
+                c.load_document(sid, text, report=True,
+                                timeout=Config.ATTEMPT_TIMEOUT, lease_id=lease)
+                for sid, lease in held))
+    except Exception as e:  # noqa: BLE001  (fewer spares is a normal outcome)
+        logger.info("scratch spares not (all) prepared for %s: %s", key, e)
     finally:
-        pool._spare_pending.discard(key)
+        left = pool._spare_pending.get(key, n) - n
+        if left > 0:
+            pool._spare_pending[key] = left
+        else:
+            pool._spare_pending.pop(key, None)
 
 
 def schedule_for_binding(pool: LspPool, binding: FileBinding) -> None:
     """Once per binding: work out the file's scratch key (header parse, in the background) and
-    start preparing a spare for it."""
+    start preparing spares for it, as many as the last multi_attempt had candidates (1 before
+    the first one)."""
     if Config.SCRATCH_SPARE <= 0 or binding.spare_scheduled or not binding.cached_text:
         return
     binding.spare_scheduled = True
@@ -65,9 +86,16 @@ def schedule_for_binding(pool: LspPool, binding: FileBinding) -> None:
         except Exception as e:  # noqa: BLE001
             logger.info("scratch spare: no key for %s: %s", binding.file_path, e)
             return
-        ensure(pool, key, text)
+        ensure(pool, key, text, pool._last_fanout)
 
     _spawn(pool, run())
+
+
+def after_attempt(pool: LspPool, key: Tuple, text: str, candidates: int) -> None:
+    """After a multi_attempt with `candidates` candidates: remember the fan-out and keep that
+    many spares ready for the file."""
+    pool._last_fanout = max(1, candidates)
+    ensure(pool, key, text, candidates)
 
 
 def _spawn(pool: LspPool, coro) -> None:
