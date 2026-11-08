@@ -66,6 +66,28 @@ object Server_Utils {
       case false => error(s"Failed to stop server ${server_info.name}.")
     }
 
+  /** Session start builds a session image that is missing or not up to date, inside the
+   *  request (Session_Start runs Build.build). ISABELLE_SESSION_START_BUILD=false forbids that:
+   *  such a build can take minutes and bypasses the server's build gates. */
+  private val session_start_build: Boolean =
+    !sys.env.get("ISABELLE_SESSION_START_BUILD").map(_.trim.toLowerCase).exists(
+      Set("0", "false", "no", "off"))
+
+  /** Fail unless the image of `session` is up to date: the check Build.build_logic makes
+   *  (no_build = true), with the options and dirs Session_Start would use. */
+  private def check_image_current(session: String, options: List[String], dirs: List[String]): Unit = {
+    val opts = Options.init(prefs = Server_Commands.default_preferences,
+      update = options.map(Options.Spec.make))
+    val results = Build.build(opts, selection = Sessions.Selection.session(session),
+      build_heap = true, no_build = true, dirs = dirs.map(Path.explode))
+    if (!results.ok) {
+      error(s"Session image $session is missing or not up to date, and " +
+        "ISABELLE_SESSION_START_BUILD=false forbids building it during session start. " +
+        s"Build it beforehand (isabelle build -b $session), or find out why it is outdated " +
+        s"(isabelle build -n -v -o build_debug $session lists the differing sources).")
+    }
+  }
+
   def start_session(server_info: Server.Info, server: Server, options: List[String], field: String = "HOL", dirs: List[String] = Nil): UUID.T = {
 
      val session_start_json = withServerContext(server_info, server) { context =>
@@ -75,6 +97,7 @@ object Server_Utils {
 
     Isabelle_Thread.fork(name = "session_start") {
       try {
+        if (!session_start_build) check_image_current(field, options, dirs)
         val args = Server_Commands.Session_Start.Args(
           build = Server_Commands.Session_Build.Args(session = field, options = options, dirs = dirs)
         )

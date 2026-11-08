@@ -256,6 +256,12 @@ ISABELLE_FILL_SAMPLE_S=2           # ATP memory attribution sample interval (s) 
 ISABELLE_PARALLEL_SESSION_CREATE=true  # Default true: the gateway lock is held only to read the gateway, so N
                                    # sessions start concurrently (4 at once: HOL 17.7 s -> 8.2 s, AutoCorrode
                                    # 101.8 s -> 42.5 s). false restores one-at-a-time creation.
+ISABELLE_SESSION_START_BUILD=true  # Default true: a session image that is missing or not up to date is built
+                                   # during session start, inside the request (minutes; outside the build
+                                   # gates). false: session start fails instead, naming the image and the
+                                   # command that lists the differing sources (server_utils.scala). An image
+                                   # copied to another HOME counts as outdated when ROOTS/components paths
+                                   # differ; check images with `isabelle build -n -v` (without -v, -n is silent).
 
 # Per-session parallel proof checking (server/repl/src/main/scala/repl/session_manager.scala, read by Scala via sys.env)
 ISABELLE_PARALLEL_PROOFS=2         # Isabelle parallel_proofs per session (default 2): 0=sequential,
