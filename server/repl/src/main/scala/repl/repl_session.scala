@@ -373,9 +373,9 @@ class Repl_Session(session_manager: Session_Manager, initial_thys: List[String] 
    *  converge to the same node text), the Thy_Info bookkeeping is re-based to
    *  a fresh append-only base (Thy_Info.reset_to_fresh_base — the old
    *  rollback/checkpoint chain is CUT: pre-replace checkpoints are unsound),
-   *  and Right(report) carries a wall-bounded status report covering only the
-   *  re-processed tail (commands starting at/after first_changed_line - 1)
-   *  with ABSOLUTE node lines. On budget expiry the replace edit is NOT
+   *  and Right(report) carries a wall-bounded status report covering the whole
+   *  node with ABSOLUTE node lines (only the commands from the first change on
+   *  are re-processed; the earlier ones keep their settled status). On budget expiry the replace edit is NOT
    *  discarded (a replace is an interleaved insert/remove sequence with no
    *  single insert to discard) — timed_out=true and the partial state stays
    *  for inspection (LSP-style, intentionally unlike verify_chunk). */
@@ -401,18 +401,13 @@ class Repl_Session(session_manager: Session_Manager, initial_thys: List[String] 
               if (text_edits.nonEmpty)
                 update_session_with_edits(List(Edit_Utils.edit_from_text_edits(text_edits)))
               thy_info.reset_to_fresh_base(target_text)
-              // Lines at/above the first change are byte-identical in old and
-              // new text, so the OLD-text line of the first change is also its
-              // line in the new node. since_line = first_changed_line - 1 also
-              // catches a multi-line command whose span starts one line above
-              // the change; an empty diff reports the whole (unchanged) node.
-              val first_changed_line = first_change match {
-                case Some(offset) => old_text.take(offset).count(_ == '\n') + 1
-                case None         => 1
-              }
-              val since_line = if (first_change.isDefined) first_changed_line - 1 else 1
+              // The report covers the WHOLE node, not only the re-processed tail:
+              // the caller replaces the file's diagnostics (and multi_attempt its
+              // prefix_failed) with it, so a command above the edit that still
+              // fails must stay in it. Unchanged commands are already settled, so
+              // this adds no waiting.
               Right(Document_Utils.node_status_report(
-                session, node_name, since_line, wall_budget_ms, absolute_lines = true))
+                session, node_name, 1, wall_budget_ms, absolute_lines = true))
             }
         }
       case _ => Left("no_begun_theory")

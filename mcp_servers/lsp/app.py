@@ -24,6 +24,7 @@ from ..common import dump_json as _j
 from ..common import translate_http_error
 from .config import Config
 from .pool import attempt_prefix, field_for, header_fields, header_text
+from .verdict import candidate_verdict
 
 from . import scratch_spare
 from . import fill_tools  # noqa: F401  (registers the fill_sorries tools on `mcp`)
@@ -162,7 +163,12 @@ async def isabelle_goal(file_path: str, line: int) -> str:
     after this one — each one text with all subgoals, empty outside a proof and for a
     command that failed. If the server does not record proof states (it was started with
     ISABELLE_SHOW_STATES=false) the result carries an error saying so instead of empty
-    goals. """
+    goals.
+
+    To see the goals a step has to prove, ask the line of that step (an `apply`, a `by`, a
+    `sorry`): its goals_before are the goals still open. Do not ask the `qed` or `done` that
+    ends the proof: after a `sorry` no goals are left there, and the goals_before of a `qed`
+    are the state of the proof block (the `this:` facts and the goal it closes). """
     binding, _ = await _bound_synced(file_path)
     return _j(await pool.call(
         binding, lambda c, sid: c.goals_at_line(sid, line, lease_id=binding.lease_id)))
@@ -209,9 +215,10 @@ async def isabelle_query(file_path: str, command: str) -> str:
     The query runs at the end of the file, after its commands: before the file's final
     `end`, or appended after the last command when the file does not end with `end`. A
     `context ... begin ... end` or locale block that is already closed at that point is
-    outside the query, so refer to its facts and constants by their qualified name
-    (`thm my_locale.my_def`, not `thm my_def`); a block still open at the end of the file
-    is inside it. While a command of the file is still running (`still_running`), the
+    outside the query, so name its facts and constants as the theory knows them, qualified
+    by the locale or named context (`thm my_locale.my_def`, `thm_oracles my_locale.my_lemma`;
+    the short name gives `Undefined fact`); a block still open at the end of the file is
+    inside it. While a command of the file is still running (`still_running`), the
     query waits for it.
     """
     binding, _ = await _bound_synced(file_path)
@@ -339,14 +346,27 @@ async def isabelle_multi_attempt(
     """Try several proof-step candidates at a position, each on an ISOLATED warm
     scratch session — the file and its session are never modified.
 
-    Takes the file's text BEFORE `line`, appends each candidate, and verifies it
-    (per-command report). `line` is 1 to the number of lines of the file plus 1; the
-    number of lines plus 1 appends the candidate after the end of the file (after a
-    final `end` a candidate has no theory to run in), any other value is an error.
-    Candidates run concurrently (bounded by ISABELLE_MCP_LSP_MAX_PARALLEL and the
-    scratch pool size). Per candidate:
+    `line` (1-based) is the first line of the file text that the candidate REPLACES: the
+    candidate takes the place of line `line` and of every line after it, and the rest of the
+    file is not part of the check, so the candidate must hold all the text from `line` on
+    that the check needs. To test a step in place of a `sorry`, give the `sorry`'s line and
+    the step; to test the next step of an open proof, give the line after its last command.
+    The tool verifies the file's text BEFORE `line` with the candidate appended (per-command
+    report): a `qed` that follows `line` in the file is not there, so a candidate that closes
+    the goals leaves the proof open (`pending_qed`). `line` is 1 to the number of lines of
+    the file plus 1; the number of lines plus 1 appends the candidate after the end of the
+    file (after a final `end` a candidate has no theory to run in), any other value is an
+    error. Candidates run concurrently (bounded by ISABELLE_MCP_LSP_MAX_PARALLEL and the
+    scratch pool size). The result is indented JSON, one entry per candidate. Per candidate:
+    - verdict: the field that says whether the candidate can be used. `ok`: it ran without
+      error or timeout and without a `sorry` of its own (goals may remain, see
+      proof_open/subgoals); `failed`: an error in the candidate, or the check did not
+      succeed; `timed_out`; `used_sorry`; `prefix_failed`: a command before `line` failed,
+      so the candidate's result is not reliable: fix the prefix first; `error`: the
+      candidate could not be run (see error);
     - success / proof_open / pending_qed / timed_out for the whole text (file part
-      before `line` plus candidate);
+      before `line` plus candidate); proof_open: goals remain after the candidate;
+      pending_qed: its goals are closed and only the closing `qed`/`done` is missing;
     - used_sorry: a `sorry` (or `oops`) of the CANDIDATE was executed;
       prefix_used_sorry: one of the file text before `line` was (the key is there
       only when it is true);
@@ -355,8 +375,9 @@ async def isabelle_multi_attempt(
       file line `line`. A failed or running command before `line` is listed in
       prefix_failed with its file `line`;
     - subgoals (only when proof_open or pending_qed): the goals the candidate
-      leaves, one text per subgoal, so the next step can be chosen without writing
-      the candidate into the file. MEMORY: a
+      leaves, so the next step can be chosen without writing the candidate into the
+      file: the goals as Isabelle prints them, one array element per line (`1. …`,
+      `2. …`; continuation lines are indented). MEMORY: a
     candidate result with error memory_pressure, or a memory_reminder on the
     answer, means the prover server is short of memory — call
     isabelle_release_idle(), then retry; if the advice says the memory is
@@ -394,7 +415,7 @@ async def isabelle_multi_attempt(
                     if rep.get("proof_open") or rep.get("pending_qed"):
                         try:
                             state = await c.get_proof_state(sid, lease_id=lease)
-                            subgoals = state.get("subgoals") or []
+                            subgoals = [ln for g in state.get("subgoals") or [] for ln in str(g).splitlines()]
                         except Exception:  # noqa: BLE001  (the goals are an extra, not the verdict)
                             subgoals = None
                 bad, prefix_bad = [], []
@@ -420,6 +441,7 @@ async def isabelle_multi_attempt(
                     prefix_used_sorry = any(n < line for n in sorry_lines)
                 result = {
                     "candidate": candidate,
+                    "verdict": candidate_verdict(rep, bad, prefix_bad, used_sorry),
                     "success": rep.get("success"),
                     "proof_open": rep.get("proof_open"),
                     "pending_qed": rep.get("pending_qed"),
@@ -441,16 +463,18 @@ async def isabelle_multi_attempt(
                 # revisit here if per-connection ownership (the stepwise model) arrives.
                 return {
                     "candidate": candidate,
+                    "verdict": "error",
                     **translate_http_error(
                         e, pool.registry, None, tools=TOOLS, idle_s=Config.ADVICE_IDLE_S
                     ),
                 }
             except Exception as e:  # noqa: BLE001
-                return {"candidate": candidate, "error": f"{type(e).__name__}: {e}"}
+                return {"candidate": candidate, "verdict": "error",
+                        "error": f"{type(e).__name__}: {e}"}
 
     results = await asyncio.gather(*(try_one(cand) for cand in candidates))
     scratch_spare.ensure(pool, key, text)  # top the warm, loaded spares up again
-    return _j(list(results))
+    return json.dumps(list(results), indent=1, ensure_ascii=False, default=str)
 
 
 @tool()

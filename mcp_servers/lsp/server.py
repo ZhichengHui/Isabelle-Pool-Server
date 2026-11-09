@@ -130,9 +130,12 @@ def _attach_still_running(out: Any, file_path: Any) -> Any:
     result["still_running_note"] = (
         f"The last check of this file stopped after {Config.LOAD_TIMEOUT:.0f} s because these "
         "commands were still running: their results are missing, and the results of other "
-        "commands may be incomplete. A command that keeps running (e.g. metis or auto that "
-        "does not terminate) makes every check of the file wait this long until it is changed, "
-        "and every isabelle_query on the file waits for it."
+        "commands may be incomplete. A command that runs longer than a check waits is not "
+        "necessarily stuck: running_for_s counts from the start of the first check that "
+        "saw it running (it restarts when the command's line changes), so compare it with the "
+        "time the step may take and check again while it is below. A command that keeps "
+        "running (e.g. metis or auto that does not terminate) makes every check of the file "
+        "wait this long until it is changed, and every isabelle_query on the file waits for it."
     )
     return dump_json(result)
 
