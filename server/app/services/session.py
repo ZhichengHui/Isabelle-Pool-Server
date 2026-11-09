@@ -27,6 +27,7 @@ from .internal_models import (
     SessionStatus,
     SmallStepExecuteResult,
 )
+from .session_reset import reset_for_load
 from .theory_chunks import preview_text
 from .theory_parsing import parse_theory_header
 
@@ -77,6 +78,7 @@ class _Isabelle_Session:
 
         self._closed = False
         self.entered_thy = ""
+        self.backend_used = False  # set by every backend call (session_reset.py)
         self._active_requests = 0
         self._active_requests_lock = threading.Lock()
 
@@ -94,6 +96,7 @@ class _Isabelle_Session:
             )
 
     def _call_backend(self, fn, timeout: Optional[float] = None):
+        self.backend_used = True
         fut: concurrent.futures.Future = self.backend.submit(fn)
         try:
             return fut.result(timeout=timeout)
@@ -363,9 +366,6 @@ class _Isabelle_Session:
         self.entered_thy = ""
         self.last_chunk_report = None
         self._loaded_text = None
-        forget = getattr(self, "forget_prover", None)  # new ML process after reset
-        if forget is not None:
-            forget()
 
     @staticmethod
     def _ends_with_theory_end(text: str) -> bool:
@@ -500,7 +500,8 @@ class _Isabelle_Session:
         Two paths. The RESET path (always used for a first load, for
         ``imports`` mode, and whenever the incremental path declines): resets
         the backend (the document model is append-only, so wholesale
-        replacement = fresh Repl_Session), clears all bookkeeping, then
+        replacement = fresh Repl_Session; skipped while the backend is still
+        pristine, see session_reset.py), clears all bookkeeping, then
         re-enters the theory and issues ``text`` as a single edit. The
         INCREMENTAL path (Phase B1, ``report=True`` full-file re-loads of the
         same theory): the backend diffs ``text`` against the live node and
@@ -542,8 +543,7 @@ class _Isabelle_Session:
                             sync_used = True
                             execution_time = time.time() - start_time
                     if not sync_used:
-                        self._call_backend(lambda: self.backend.raw.reset(), timeout=timeout)
-                        self._reset_bookkeeping()
+                        reset_for_load(self, timeout)  # skipped on a pristine backend
 
                         name = thy_name
                         if not name and not imports:

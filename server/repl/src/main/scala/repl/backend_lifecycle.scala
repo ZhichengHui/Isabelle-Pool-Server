@@ -38,7 +38,7 @@ trait Backend_Lifecycle { this: ReplBackend =>
    *  Used by the whole-document replace primitive (PUT .../document) and by
    *  session recovery. */
   def reset(): Repl_Result = build_result {
-
+    forget_ml_pid()  // the process the memory probe saw is about to stop
     if (session_manager_instance.get_cache_status().contains("Enabled: true")) {
       // with cache
       repl_session.stop_with_cache()

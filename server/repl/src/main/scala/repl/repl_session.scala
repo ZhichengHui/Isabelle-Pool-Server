@@ -364,9 +364,9 @@ class Repl_Session(session_manager: Session_Manager, initial_thys: List[String] 
    *  caller MUST fall back to the reset path:
    *    - "no_begun_theory": no theory entered, or the header was never
    *      processed (there is no stable document base to diff against);
-   *    - "header_changed": the FIRST diff hunk touches the theory header
-   *      (the `theory … begin` command span of the OLD text) — includes a
-   *      theory-name change. Header edits are not applied incrementally.
+   *    - "header_changed": the FIRST diff hunk touches the theory header text
+   *      (`theory … begin` of the OLD text, without the whitespace after it) —
+   *      includes a theory-name change. Header edits are not applied incrementally.
    *
    *  Otherwise the node text becomes exactly `new_text + "\n"` (mirroring
    *  send_edit's trailing newline, so the fast path and the reset path
@@ -390,7 +390,13 @@ class Repl_Session(session_manager: Session_Manager, initial_thys: List[String] 
             val target_text = new_text + "\n"
             val (text_edits, first_change) =
               Edit_Utils.text_diff_edits(old_text, target_text)
-            if (first_change.exists(_ < header_end)) Left("header_changed")
+            // The header text is unchanged when the first change lies at or after its
+            // end AND the new text still separates `begin` from what follows (an edit
+            // right at the end must not glue a token onto `begin`).
+            val glued =
+              target_text.length > header_end && !Character.isWhitespace(target_text.charAt(header_end))
+            if (first_change.exists(c => c < header_end || (c == header_end && glued)))
+              Left("header_changed")
             else {
               if (text_edits.nonEmpty)
                 update_session_with_edits(List(Edit_Utils.edit_from_text_edits(text_edits)))

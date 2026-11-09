@@ -8,9 +8,16 @@ import uuid
 
 from server.app.api.v1.memory_hooks import run_with_memory_hooks
 from server.app.services.session_memory import MemoryAwareSession
+from server.app.services.session_reset import reset_for_load
 
 
 class _Raw:
+    def __init__(self):
+        self.resets = 0
+
+    def reset(self):
+        self.resets += 1
+
     def session_phase(self):
         return "Ready"
 
@@ -74,9 +81,52 @@ def test_reset_forgets_the_old_pid_and_the_hook_keeps_the_session():
     ]  # the stale pid rule, unchanged
     s2 = _session()
     s2.ml_pid, s2.ml_starttime = 999_999_999, 1
-    s2._reset_bookkeeping()  # what load_document's reset path calls
+    s2.backend_used = True  # a used backend: the reset path really resets
+    reset_for_load(s2, 5.0)  # what load_document's reset path calls
     assert s2.ml_pid is None and s2.mem_sampled_at == 0.0
     mgr2 = _Mgr()
     result, override = run_with_memory_hooks(lambda: "ok", s2, mgr2)
     assert result == "ok" and override is None and mgr2.discarded == []
     assert s2.ml_pid == 4242  # the probe after the call recorded the NEW pid
+
+
+def test_a_pristine_backend_is_not_reset():
+    """A session that has done nothing since it was created is already what a reset
+    produces (same theories, field, dirs): the first load must not restart its prover."""
+    s = _session()
+    assert reset_for_load(s, 5.0) is False and s.backend.raw.resets == 0
+
+
+def test_a_used_backend_is_reset():
+    s = _session()
+    s._call_backend(lambda: s.backend.raw.session_phase())  # any backend call at all
+    assert reset_for_load(s, 5.0) is True and s.backend.raw.resets == 1
+
+
+def test_a_load_that_failed_after_its_reset_still_counts_as_used():
+    """The reset path clears the Python bookkeeping before it enters the theory; if the
+    load then fails, the next load must reset again (live probe 2026-11-09: a failed
+    header load, then a theory-name change, skipped the reset and lost the session)."""
+    s = _session()
+    reset_for_load(s, 5.0)  # first load: pristine, no reset
+    s._call_backend(lambda: None)  # ... its enter_thy / step reached the backend, then failed
+    s._reset_bookkeeping()
+    assert reset_for_load(s, 5.0) is True and s.backend.raw.resets == 1
+
+
+def test_a_reset_that_times_out_is_not_read_as_a_prover_death():
+    """The reset stops the recorded process; if it then outlives the budget, the
+    death check must not find that stale pid and discard the session."""
+    s = _session()
+    s.backend_used = True
+    s.ml_pid, s.ml_starttime = 999_999_999, 1  # the process the reset stops
+
+    def slow_reset():
+        raise TimeoutError("Backend call timed out after 20.0s")
+
+    s.backend.raw.reset = slow_reset
+    try:
+        reset_for_load(s, 5.0)
+    except Exception:  # noqa: BLE001  (the timeout itself is the caller's to report)
+        pass
+    assert s.ml_pid is None and s.check_prover_dead() is False

@@ -116,7 +116,7 @@ def test_first_load_uses_reset_path_even_with_report():
     session = _make_session()
     result = session.load_document(_DOC_V1, report=True)
     assert result.success
-    assert session.backend.raw.reset_calls == 1
+    assert session.backend.raw.reset_calls == 0  # a pristine backend is not reset (session_reset.py)
     assert session.backend.raw.sync_calls == []
     assert session.command_history[-1]["type"] == "document_load"
     assert session._loaded_text == _DOC_V1
@@ -128,7 +128,7 @@ def test_reload_same_theory_uses_sync_path():
     result = session.load_document(_DOC_V2, report=True)
     assert result.success
     # no second reset: ONE PIDE replace edit instead of a fresh elaboration
-    assert session.backend.raw.reset_calls == 1
+    assert session.backend.raw.reset_calls == 0
     assert len(session.backend.raw.sync_calls) == 1
     text, budget_ms, _ = session.backend.raw.sync_calls[0]
     assert text == _DOC_V2 and budget_ms > 0
@@ -142,7 +142,7 @@ def test_theory_name_change_uses_reset_path():
     session.load_document(_DOC_V1, report=True)
     session.load_document(_DOC_OTHER_THEORY, report=True)
     assert session.backend.raw.sync_calls == []
-    assert session.backend.raw.reset_calls == 2
+    assert session.backend.raw.reset_calls == 1
     assert session.backend.raw.entered == ["Foo", "Bar"]
     assert session.command_history[-1]["type"] == "document_load"
     assert session._loaded_text == _DOC_OTHER_THEORY
@@ -157,7 +157,7 @@ def test_backend_fallback_marker_falls_back_to_reset():
     result = session.load_document(_DOC_V2, report=True)
     assert result.success
     assert len(session.backend.raw.sync_calls) == 1  # attempted ...
-    assert session.backend.raw.reset_calls == 2      # ... then reset anyway
+    assert session.backend.raw.reset_calls == 1      # ... then reset anyway
     assert session.command_history[-1]["type"] == "document_load"
     assert session._loaded_text == _DOC_V2
 
@@ -167,11 +167,11 @@ def test_report_false_never_syncs():
     session.load_document(_DOC_V1)
     session.load_document(_DOC_V2)
     assert session.backend.raw.sync_calls == []
-    assert session.backend.raw.reset_calls == 2
+    assert session.backend.raw.reset_calls == 1
     # ... but _loaded_text is still tracked for later report=True syncs
     session.load_document(_DOC_V2, report=True)
     assert len(session.backend.raw.sync_calls) == 1
-    assert session.backend.raw.reset_calls == 2
+    assert session.backend.raw.reset_calls == 1
 
 
 def test_imports_mode_never_syncs():
@@ -180,7 +180,7 @@ def test_imports_mode_never_syncs():
     session.load_document("lemma True by simp", thy_name="Foo",
                           imports=["Main"], report=True)
     assert session.backend.raw.sync_calls == []
-    assert session.backend.raw.reset_calls == 2
+    assert session.backend.raw.reset_calls == 1
 
 
 # ------------------------------------------------------- sync bookkeeping
@@ -243,5 +243,5 @@ def test_unparseable_sync_reply_is_a_failure_not_a_fallback():
     # failing report, no reset happened
     assert not result.success
     assert result.error == "unparseable backend report"
-    assert session.backend.raw.reset_calls == 1
+    assert session.backend.raw.reset_calls == 0
     assert session.command_history[-1]["type"] == "document_sync"

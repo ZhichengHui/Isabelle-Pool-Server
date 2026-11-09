@@ -170,15 +170,22 @@ object Document_Utils {
       .lastOption
   }
 
-  /** End offset (exclusive) of the node's theory-HEADER command (`theory …
-   *  begin` is ONE command span named "theory"), if the node has one. Used by
-   *  Repl_Session.replace_document to detect diffs that touch the header —
-   *  those are NOT applied incrementally (the caller falls back to reset). */
+  /** End offset (exclusive) of the node's theory HEADER text — the `theory …
+   *  begin` command span named "theory", WITHOUT the whitespace PIDE attaches to
+   *  that span (the blank lines after `begin` belong to the body as far as the
+   *  header is concerned). Used by Repl_Session.replace_document to detect diffs
+   *  that touch the header — those are NOT applied incrementally (the caller
+   *  falls back to reset). Counting the trailing whitespace made every edit at
+   *  the start of the body (e.g. a lemma inserted right after `begin`) a
+   *  "header change" and restarted the prover. */
   def header_end_offset(session: Headless.Session, node_name: Document.Node.Name): Option[Text.Offset] = {
     val snapshot = node_snapshot(session, node_name)  // syntactic: no evaluation wait
     snapshot.node.command_iterator().toList
       .collectFirst { case (command, offset) if command.span.name == "theory" =>
-        offset + command.length
+        val source = command.source
+        var end = source.length
+        while (end > 0 && Character.isWhitespace(source.charAt(end - 1))) end -= 1
+        offset + end
       }
   }
 
