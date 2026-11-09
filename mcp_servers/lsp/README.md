@@ -25,9 +25,8 @@ Claude Code loads them upfront; the other tools stay deferred.
 `skills/isabelle-proof-development/SKILL.md` is a Claude Code skill on developing proofs with this
 MCP: locating with `isabelle_diagnostic_messages` and iterating with `isabelle_multi_attempt`, the
 order quick attempts → `isabelle_sledgehammer` → `sorry` skeleton with `isabelle_fill_sorries`,
-not guessing `metis` calls, what `still_running` means and why a step that runs for seconds should
-be tested in isolation, searching with `isabelle_query`, and running the batch build only as the
-final check. Install it by copying the directory to `~/.claude/skills/` (or a project's
+not guessing `metis` calls, a 10-second limit per proof step and what to do on `still_running`,
+searching with `isabelle_query`, and running the batch build only as the final check. Install it by copying the directory to `~/.claude/skills/` (or a project's
 `.claude/skills/`). It draws on the public `isabelle-proof-development` skill, kappelmann's
 `isabelle` skill (isabelle-pide-ai), yonoteam's `proving-with-sorry-skeletons` and AutoCorrode's
 `ic2` skill, mapped onto this MCP's tools.
