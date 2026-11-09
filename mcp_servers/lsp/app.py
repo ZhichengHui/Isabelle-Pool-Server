@@ -365,7 +365,8 @@ async def isabelle_multi_attempt(
       so the candidate's result is not reliable: fix the prefix first; `error`: the
       candidate could not be run (see error);
     - success / proof_open / pending_qed / timed_out for the whole text (file part
-      before `line` plus candidate);
+      before `line` plus candidate); proof_open: goals remain after the candidate;
+      pending_qed: its goals are closed and only the closing `qed`/`done` is missing;
     - used_sorry: a `sorry` (or `oops`) of the CANDIDATE was executed;
       prefix_used_sorry: one of the file text before `line` was (the key is there
       only when it is true);

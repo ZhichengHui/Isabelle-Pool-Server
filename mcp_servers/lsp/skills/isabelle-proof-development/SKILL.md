@@ -23,11 +23,14 @@ Load a tool with ToolSearch when a rule calls for it; its description says how t
 
 1. `isabelle_open` the file. After every edit, check it with `isabelle_diagnostic_messages`.
 2. Read the goal a step must prove with `isabelle_goal` (`goals_before` at the step's own line, not at the `qed` or `done` after it).
-3. Test every step with `isabelle_multi_attempt` before writing it into the file, however short it is:
+3. Test a step with `isabelle_multi_attempt` before writing it into the file as part of the proof:
    a step that does not finish blocks every later check and query of the file. `line` is the first
    line the candidate replaces. A candidate passes when its `verdict` is `ok`; `proof_open` only means
-   the proof continues. Only sledgehammer suggestions and structural commands (`proof`, `case`,
-   `have … sorry`, `next`, `qed`) need no test; methods such as `crush_base` or a loop rule do.
+   the proof continues, and `pending_qed` that its goals are closed and only the closing `qed` or
+   `done` is missing. Sledgehammer suggestions and structural commands (`proof`, `case`,
+   `have … sorry`, `next`, `qed`) need no test. To explore the goals a method leaves, you may also
+   write the method followed by `sorry` into the file and read them with `isabelle_goal`; check the
+   file right after, and treat the method like any step under rules 4 and 5.
 4. A step must finish within 10 seconds (`timeout` 10), unless the project's skill sets another limit.
 5. A result with `still_running` means a command is still running after the 30 s a check waits.
    While its `running_for_s` is below the step's limit (rule 4), check again; once it exceeds the
@@ -37,7 +40,8 @@ Load a tool with ToolSearch when a rule calls for it; its description says how t
    and `grep` finds no `sorry` in the file. Then run the task's batch build once, saving its output
    with `tee`. The batch build reports errors but not the output of commands such as
    `thm_oracles`; read that with `isabelle_query`, naming each theorem as the theory knows it: qualified
-   by its locale or named context (`Ctx.thm`), otherwise the result is `Undefined fact`.
+   by its locale or named context (`Ctx.thm`), otherwise the result is `Undefined fact`. An output
+   of `oracles:` with nothing after it means the theorem uses no oracle.
 
 ## Finding a step
 
