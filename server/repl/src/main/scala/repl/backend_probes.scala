@@ -81,8 +81,13 @@ trait Backend_Probes { this: ReplBackend =>
     }
 
   /** The ML process pid seen by the memory probe, kept once known so later
-   *  answers (and answers given while the overlay cannot run) still carry it. */
+   *  answers (and answers given while the overlay cannot run) still carry it.
+   *  Forgotten by `reset` (Backend_Lifecycle): the reset stops that process, and
+   *  a stale pid handed out while the new theory is not begun (e.g. its header
+   *  failed) was read by the server as "prover died" and lost the session. */
   @volatile private var cached_ml_pid: Option[String] = None
+
+  private[repl] def forget_ml_pid(): Unit = cached_ml_pid = None
 
   /** Memory facts of this session's ML process (REPL.ML `Repl.mem_stats`):
    *  `pid` (from /proc/self; absent on non-Linux hosts) and the Poly/ML
