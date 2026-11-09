@@ -78,6 +78,7 @@ class _Isabelle_Session:
 
         self._closed = False
         self.entered_thy = ""
+        self.backend_used = False  # set by every backend call (session_reset.py)
         self._active_requests = 0
         self._active_requests_lock = threading.Lock()
 
@@ -95,6 +96,7 @@ class _Isabelle_Session:
             )
 
     def _call_backend(self, fn, timeout: Optional[float] = None):
+        self.backend_used = True
         fut: concurrent.futures.Future = self.backend.submit(fn)
         try:
             return fut.result(timeout=timeout)

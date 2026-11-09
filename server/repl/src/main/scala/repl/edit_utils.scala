@@ -93,12 +93,21 @@ object Edit_Utils {
   /** Minimal insert/remove edit sequence transforming `old_text` into
    *  `new_text` (see `diff_edits`; whole-node texts, origin 0). Also returns
    *  the offset in `old_text` of the FIRST change (None when identical).
-   *  Backs Repl_Session.replace_document (incremental PIDE document sync). */
+   *  Backs Repl_Session.replace_document (incremental PIDE document sync).
+   *  Only the texts after their common prefix are diffed: a character diff may
+   *  place an equivalent edit inside unchanged text (e.g. start a line inserted
+   *  after `begin` inside the word `begin`), and replace_document reads the
+   *  first change as a header edit and restarts the prover. */
   def text_diff_edits(
       old_text: String,
       new_text: String
-  ): (List[Text.Edit], Option[Text.Offset]) =
-    diff_edits(old_text, new_text)
+  ): (List[Text.Edit], Option[Text.Offset]) = {
+    val n = old_text.length min new_text.length
+    var p = 0
+    while (p < n && old_text.charAt(p) == new_text.charAt(p)) p += 1
+    if (p > 0 && Character.isHighSurrogate(old_text.charAt(p - 1))) p -= 1  // keep pairs whole
+    diff_edits(old_text.substring(p).nn, new_text.substring(p).nn, origin = p)
+  }
 
   def set_required_edit(required: Boolean): Edit =
     Document.Node.Perspective[Text.Edit, Text.Perspective](
