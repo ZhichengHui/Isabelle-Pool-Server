@@ -96,6 +96,135 @@ def test_open_proof_returns_the_remaining_goals(tmp_path, monkeypatch):
     assert fake.state_calls == 1
 
 
+def test_subgoals_are_lines_and_the_result_is_indented_readable_json(tmp_path, monkeypatch):
+    lsp_app, fake = _fresh(monkeypatch)
+    fake.state = {"subgoals": ["1. \\<And>x. P x \\<Longrightarrow>\n      Q x", "2. R"],
+                  "proof_finished": False}
+    report = {"success": True, "proof_open": True, "pending_qed": False, "timed_out": False,
+              "commands": []}
+    f = _file(tmp_path)
+    fake.next_reports = [{"success": True, "commands": []}, report]
+
+    async def run():
+        await lsp_app.isabelle_open(file_path=str(f))
+        return await lsp_app.isabelle_multi_attempt(
+            file_path=str(f), line=4, candidates=["lemma c: True\n  by simp"])
+
+    raw = asyncio.run(run())
+    assert raw.count("\n") > 10  # one field or line per row, not one compact line
+    assert '"      Q x"' in raw  # a goal's continuation line is a row of its own
+    assert json.loads(raw)[0]["subgoals"] == [
+        "1. \\<And>x. P x \\<Longrightarrow>", "      Q x", "2. R"]
+
+
+def test_unicode_in_messages_is_not_escaped(tmp_path, monkeypatch):
+    lsp_app, fake = _fresh(monkeypatch)
+    report = {"success": False, "proof_open": False, "pending_qed": False, "commands": [
+        _failed_cmd(4, [{"sev": "error", "text": "goal: A \u2227 B"}])]}
+    f = _file(tmp_path)
+    fake.next_reports = [{"success": True, "commands": []}, report]
+
+    async def run():
+        await lsp_app.isabelle_open(file_path=str(f))
+        return await lsp_app.isabelle_multi_attempt(
+            file_path=str(f), line=4, candidates=["lemma c: True\n  by simp"])
+
+    raw = asyncio.run(run())
+    assert "A \u2227 B" in raw and "\\u2227" not in raw
+
+
+# --------------------------------------------------------------- the verdict
+
+
+def _verdict_of(lsp_app, fake, tmp_path, report, candidates=("lemma c: True\n  by simp",)):
+    return [c["verdict"] for c in _attempt(lsp_app, _file(tmp_path), fake, report,
+                                           candidates=candidates)]
+
+
+def test_verdict_ok_for_a_clean_candidate_with_or_without_open_goals(tmp_path, monkeypatch):
+    lsp_app, fake = _fresh(monkeypatch)
+    clean = {"success": True, "proof_open": False, "pending_qed": False, "commands": []}
+    assert _verdict_of(lsp_app, fake, tmp_path, clean) == ["ok"]
+    opened = {"success": True, "proof_open": True, "pending_qed": False, "commands": []}
+    assert _verdict_of(lsp_app, fake, tmp_path, opened) == ["ok"]
+
+
+def test_verdict_failed_when_the_candidate_has_an_error(tmp_path, monkeypatch):
+    lsp_app, fake = _fresh(monkeypatch)
+    report = {"success": False, "proof_open": False, "pending_qed": False,
+              "commands": [_failed_cmd(4, [{"sev": "error", "text": "e"}])]}
+    assert _verdict_of(lsp_app, fake, tmp_path, report) == ["failed"]
+
+
+def test_verdict_failed_when_the_check_fails_without_a_failed_command(tmp_path, monkeypatch):
+    lsp_app, fake = _fresh(monkeypatch)
+    report = {"success": False, "proof_open": False, "pending_qed": False, "commands": []}
+    assert _verdict_of(lsp_app, fake, tmp_path, report) == ["failed"]
+
+
+def test_verdict_prefix_failed_is_not_a_pass_although_failed_is_empty(tmp_path, monkeypatch):
+    lsp_app, fake = _fresh(monkeypatch)
+    report = {"success": False, "proof_open": False, "pending_qed": False,
+              "commands": [_failed_cmd(2, [{"sev": "error", "text": "prefix broke"}], kind="lemma")]}
+    (cand,) = _attempt(lsp_app, _file(tmp_path), fake, report)
+    assert cand["failed"] == [] and cand["success"] is False  # what the old pass rule read as ok
+    assert cand["verdict"] == "prefix_failed"
+
+
+def test_verdict_prefix_failed_wins_over_the_candidates_own_error(tmp_path, monkeypatch):
+    lsp_app, fake = _fresh(monkeypatch)
+    report = {"success": False, "proof_open": False, "pending_qed": False, "commands": [
+        _failed_cmd(2, [{"sev": "error", "text": "p"}], kind="lemma"),
+        _failed_cmd(5, [{"sev": "error", "text": "c"}], kind="by")]}
+    assert _verdict_of(lsp_app, fake, tmp_path, report) == ["prefix_failed"]
+
+
+def test_verdict_timed_out(tmp_path, monkeypatch):
+    lsp_app, fake = _fresh(monkeypatch)
+    report = {"success": False, "proof_open": False, "pending_qed": False, "timed_out": True,
+              "commands": [_failed_cmd(5, [], status="running", kind="by")]}
+    assert _verdict_of(lsp_app, fake, tmp_path, report) == ["timed_out"]
+
+
+def test_verdict_used_sorry_only_for_the_candidates_own_sorry(tmp_path, monkeypatch):
+    lsp_app, fake = _fresh(monkeypatch)
+    own = {"success": True, "proof_open": False, "pending_qed": False, "sorry_lines": [5],
+           "commands": []}
+    assert _verdict_of(lsp_app, fake, tmp_path, own) == ["used_sorry"]
+    prefix = {"success": True, "proof_open": False, "pending_qed": False, "sorry_lines": [3],
+              "commands": []}
+    assert _verdict_of(lsp_app, fake, tmp_path, prefix) == ["ok"]
+
+
+def test_verdict_error_when_the_candidate_cannot_run(tmp_path, monkeypatch):
+    lsp_app, fake = _fresh(monkeypatch)
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("scratch session died")
+
+    f = _file(tmp_path)
+
+    async def run():
+        await lsp_app.isabelle_open(file_path=str(f))
+        monkeypatch.setattr(fake, "load_document", boom)
+        return json.loads(await lsp_app.isabelle_multi_attempt(
+            file_path=str(f), line=4, candidates=["by simp"]))
+
+    (cand,) = asyncio.run(run())
+    assert cand["verdict"] == "error" and "scratch session died" in cand["error"]
+
+
+def test_tool_descriptions_state_line_and_verdict(monkeypatch):
+    pytest.importorskip("mcp")
+    from mcp_servers.lsp import app as lsp_app
+
+    doc = lsp_app.isabelle_multi_attempt.__doc__
+    assert "REPLACES" in doc and "every line after it" in doc
+    assert "verdict" in doc and "prefix_failed" in doc
+    assert "qed" in lsp_app.isabelle_goal.__doc__ and "sorry" in lsp_app.isabelle_goal.__doc__
+    assert "thm_oracles" in lsp_app.isabelle_query.__doc__
+
+
 def test_pending_qed_returns_the_goals_too(tmp_path, monkeypatch):
     lsp_app, fake = _fresh(monkeypatch)
     fake.state = {"subgoals": [], "proof_finished": True}

@@ -723,6 +723,8 @@ def test_still_running_is_attached_only_after_a_timed_out_load(tmp_path, monkeyp
     assert out["messages"] == []
     assert out["still_running"][0]["line"] == 5 and out["still_running"][0]["kind"] == "by"
     assert "still_running_note" in out
+    # a step that may take longer than a check waits must not read as stuck
+    assert "running_for_s" in out["still_running_note"] and "check again" in out["still_running_note"]
     # non-object results and files without a binding are returned unchanged
     assert lsp_server._attach_still_running('[1, 2]', str(f)) == '[1, 2]'
     assert lsp_server._attach_still_running('{"a": 1}', str(tmp_path / "Other.thy")) == '{"a": 1}'
