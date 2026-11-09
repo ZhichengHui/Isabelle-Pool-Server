@@ -36,3 +36,6 @@ def _no_scratch_spares(monkeypatch):
     from mcp_servers.lsp.config import Config
 
     monkeypatch.setattr(Config, "SCRATCH_SPARE", 0)
+    # Likewise the lease-renewal loop (mcp_servers/lsp/lease_renewal.py); its own
+    # tests turn it on.
+    monkeypatch.setattr(Config, "LEASE_RENEW_S", 0.0)

@@ -21,7 +21,7 @@ from server.app.core.logging import get_logger, logging_context
 from server.app.core import metrics
 from server.app.errors import GatewayUnavailable, SessionError
 from server.app.services.session import SessionStatus, _Isabelle_Session
-from server.app.services.session_memory import expiry_fields, memory_fields
+from server.app.services.session_memory import expiry_fields, lease_alive_at, memory_fields
 
 # Single global lock guarding gateway (re)creation across all manager operations.
 _gateway_lock = threading.Lock()
@@ -313,11 +313,11 @@ class SessionManagerHelpersMixin:
                 if session.status == SessionStatus.CLOSED:
                     continue
                 if session.leased:
-                    if session.is_idle(self.max_lease_age, now=now):
+                    if now - lease_alive_at(session) > self.max_lease_age:
                         logger.warning(
                             "force-closing abandoned leased session "
                             "session_id=%s lease_id=%s idle_for=%.0fs",
-                            sid, session.lease_id, now - session.last_activity,
+                            sid, session.lease_id, now - lease_alive_at(session),
                         )
                         to_close.append(sid)
                     continue

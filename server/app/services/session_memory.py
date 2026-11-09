@@ -310,6 +310,13 @@ def check_prover_dead(session: Any) -> bool:
     return isinstance(session, SessionMemoryMixin) and session.check_prover_dead()
 
 
+def lease_alive_at(session: Any) -> float:
+    """When a leased session last showed that its holder is alive: its last use
+    or its last lease renewal (POST .../renew_lease), whichever is later. The
+    abandoned-lease rule (``max_lease_age``) counts from here."""
+    return max(float(session.last_activity), float(getattr(session, "lease_renewed_at", 0.0)))
+
+
 def expiry_fields(
     session: Any, now: float, idle_timeout: float, max_lease_age: float
 ) -> Dict[str, Any]:
@@ -321,7 +328,9 @@ def expiry_fields(
     last = float(session.last_activity)
     leased = bool(session.leased)
     idle_expires_at: Optional[float] = None if leased else last + idle_timeout
-    lease_expires_at: Optional[float] = last + max_lease_age if leased else None
+    lease_expires_at: Optional[float] = (
+        lease_alive_at(session) + max_lease_age if leased else None
+    )
     applies: float = (
         lease_expires_at if lease_expires_at is not None else last + idle_timeout
     )

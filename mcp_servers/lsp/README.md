@@ -176,8 +176,12 @@ this MCP's to release) and never words advice; it reports **facts**: every 503 b
 `memory_reminder` to results and closes its idle warm scratch sessions first. Advice, in order:
 release what you hold but do not use (`isabelle_release_idle()`, `isabelle_close(file,
 destroy=true)`), retry after `retry_after_s`, and — when the memory is held by other clients,
-builds, or external pressure — stop and tell the user. Knobs: `ISABELLE_MCP_LSP_SCRATCH_IDLE_S`
-(default 300 s, warm scratch TTL) and `ISABELLE_MCP_LSP_ADVICE_IDLE_S` (default 120 s).
+builds, or external pressure — stop and tell the user. While it runs, the MCP renews the lease of
+every session it holds (`POST /api/v1/sessions/{id}/renew_lease`, every
+`ISABELLE_MCP_LSP_LEASE_RENEW_S`, default 60 s), so the server's abandoned-lease rule
+(`ISABELLE_MAX_LEASE_AGE`) closes only the sessions of a client that died; warm scratch sessions
+are kept however long they are idle and let go on memory pressure. Knob for advice:
+`ISABELLE_MCP_LSP_ADVICE_IDLE_S` (default 120 s).
 
 ### Sledgehammer on `sorry`s (fill_sorries)
 
