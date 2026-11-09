@@ -179,6 +179,8 @@ async def isabelle_query(file_path: str, command: str) -> str:
     find_*, and any print_* inspector (print_theorems, print_facts,
     print_statement, print_simpset, ...). Code-executing / IO commands (ML,
     setup, *_file, ...) are rejected. Transient: the proof script is untouched.
+    The query runs at the end of the file, after its commands: while a command of
+    the file is still running (`still_running`), the query waits for it.
     """
     binding, _ = await _bound_synced(file_path)
     return _j(await pool.call(

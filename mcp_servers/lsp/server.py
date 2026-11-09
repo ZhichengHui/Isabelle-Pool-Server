@@ -131,7 +131,8 @@ def _attach_still_running(out: Any, file_path: Any) -> Any:
         f"The last check of this file stopped after {Config.LOAD_TIMEOUT:.0f} s because these "
         "commands were still running: their results are missing, and the results of other "
         "commands may be incomplete. A command that keeps running (e.g. metis or auto that "
-        "does not terminate) makes every check of the file wait this long until it is changed."
+        "does not terminate) makes every check of the file wait this long until it is changed, "
+        "and every isabelle_query on the file waits for it."
     )
     return dump_json(result)
 
