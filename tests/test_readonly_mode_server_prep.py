@@ -164,7 +164,7 @@ def test_load_document_resets_backend_and_derives_theory_name():
     result = session.load_document(
         "theory Foo imports Main begin\nlemma True by simp\nend"
     )
-    assert session.backend.raw.reset_calls == 1
+    assert session.backend.raw.reset_calls == 0  # pristine backend: no reset (session_reset.py)
     assert session.backend.raw.entered == ["Foo"]
     assert session.entered_thy == "Foo"
     assert result.success
