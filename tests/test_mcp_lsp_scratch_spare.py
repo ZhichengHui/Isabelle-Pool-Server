@@ -148,3 +148,30 @@ def test_spares_capped_by_max_parallel(tmp_path, monkeypatch):
     asyncio.run(run())
     assert len(_scratch_created(fake)) == 2
 
+
+def test_spares_are_created_concurrently(tmp_path, monkeypatch):
+    """The spares' sessions are requested at once (the server creates them in parallel);
+    requested one after another, 4 AutoCorrode spares took 80 s, longer than the agent's pause."""
+    lsp_app, pool, fake = _fresh(monkeypatch, spare=4)
+    monkeypatch.setattr(Config, "MAX_PARALLEL", 4)
+    inflight = {"now": 0, "max": 0}
+    create = fake.create_session
+
+    async def slow_create(*args, **kwargs):
+        inflight["now"] += 1
+        inflight["max"] = max(inflight["max"], inflight["now"])
+        await asyncio.sleep(0.05)
+        inflight["now"] -= 1
+        return await create(*args, **kwargs)
+
+    monkeypatch.setattr(fake, "create_session", slow_create)
+    f = tmp_path / "Fan.thy"
+    f.write_text(TEXT)
+
+    async def run():
+        await lsp_app.isabelle_open(file_path=str(f))
+        await _settle(pool)
+
+    asyncio.run(run())
+    assert inflight["max"] == 4 and len(_scratch_created(fake)) == 4
+

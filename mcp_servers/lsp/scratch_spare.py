@@ -17,7 +17,6 @@ pool at its cap, a timeout) only means fewer spares: a candidate without one cre
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from typing import Tuple
 
@@ -47,20 +46,42 @@ def ensure(pool: LspPool, key: Tuple, text: str) -> None:
 
 
 async def _prepare(pool: LspPool, key: Tuple, text: str, n: int) -> None:
-    """Hold `n` scratch sessions at once (the idle ones first, then new ones), load the text
-    into all of them, then release them together. Taken one at a time, each acquire would get
-    back the session the previous one had just released, and no new session would be made."""
+    """Acquire `n` scratch sessions concurrently (the idle ones first, then new ones, which the
+    server creates in parallel), load the text into each, and release them only when all are
+    done. Released one by one, the next acquire would get back the session just released and
+    no new session would be made; acquired one after another, the creations were serialized
+    (4 AutoCorrode spares took 80 s, longer than the agent's pause)."""
+    finished = 0
+    all_finished = asyncio.Event()
+
+    def finish() -> None:
+        nonlocal finished
+        finished += 1
+        if finished == n:
+            all_finished.set()
+
+    async def one() -> None:
+        entered = False
+        try:
+            async with pool.scratch_session(key) as (sid, lease):
+                entered = True
+                try:
+                    c = await pool.client()
+                    await c.load_document(sid, text, report=True,
+                                          timeout=Config.ATTEMPT_TIMEOUT, lease_id=lease)
+                finally:
+                    finish()
+                    await all_finished.wait()  # hold the session until every spare is loaded
+        finally:
+            if not entered:
+                finish()  # the acquire failed: do not keep the others waiting
+
     try:
-        async with contextlib.AsyncExitStack() as stack:
-            held = [await stack.enter_async_context(pool.scratch_session(key))
-                    for _ in range(n)]
-            c = await pool.client()
-            await asyncio.gather(*(
-                c.load_document(sid, text, report=True,
-                                timeout=Config.ATTEMPT_TIMEOUT, lease_id=lease)
-                for sid, lease in held))
-    except Exception as e:  # noqa: BLE001  (fewer spares is a normal outcome)
-        logger.info("scratch spares not (all) prepared for %s: %s", key, e)
+        outcomes = await asyncio.gather(*(one() for _ in range(n)), return_exceptions=True)
+        failed = [o for o in outcomes if isinstance(o, BaseException)]
+        if failed:  # fewer spares is a normal outcome
+            logger.info("%d of %d scratch spares not prepared for %s: %s",
+                        len(failed), n, key, failed[0])
     finally:
         left = pool._spare_pending.get(key, n) - n
         if left > 0:
