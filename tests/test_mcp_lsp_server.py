@@ -522,29 +522,6 @@ def test_registry_tracks_bindings_and_scratch(tmp_path):
     assert all("lease" not in k for e in pool.registry.all() for k in e.to_agent())
 
 
-def test_scratch_idle_ttl_closes_stale_sessions(monkeypatch):
-    from mcp_servers.lsp.config import Config
-
-    monkeypatch.setattr(
-        Config, "SCRATCH_IDLE_S", 0.0
-    )  # everything released is stale at once
-    pool = _pool_with_fake()
-    key = pool.scratch_key("default", None, ["Main"], None)
-
-    async def run():
-        a = await pool.acquire_scratch(key)
-        await pool.release_scratch(key, *a)
-        await asyncio.sleep(0.01)
-        b = await pool.acquire_scratch(
-            key
-        )  # the stale one is dropped, a fresh one created
-        return a, b
-
-    a, b = asyncio.run(run())
-    assert a != b and pool._client.closed == [a[0]]
-    assert pool.registry.get(a[0]) is None and pool.registry.get(b[0]) is not None
-
-
 def test_retire_idle_scratch_and_release_idle_bindings(tmp_path):
     f = tmp_path / "Idle.thy"
     f.write_text("theory Idle imports Main begin end")

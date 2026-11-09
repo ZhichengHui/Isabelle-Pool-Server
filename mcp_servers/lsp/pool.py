@@ -38,6 +38,7 @@ from ..common import (  # noqa: F401  (is_not_found re-exported)
     SessionRegistry,
     is_not_found,
 )
+from . import lease_renewal
 from .config import Config
 
 
@@ -182,6 +183,7 @@ class LspPool(GymClientMixin):
             task_group=group,
             heap_session=heap_session,
         )
+        lease_renewal.ensure(self)
         self.registry.register(
             binding.session_id,
             binding.lease_id,
@@ -407,16 +409,13 @@ class LspPool(GymClientMixin):
         clear error naming the cap and the wait."""
         async with self._scratch_lock:
             queue = self._scratch.setdefault(key, asyncio.Queue())
-        while True:
-            try:
-                sid, lease, released_at = queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-            if time.time() - released_at > Config.SCRATCH_IDLE_S:
-                # Warm but idle too long: let go (it is leased, so only the MCP
-                # can free it — review f1fb31a / plan G4).
-                await self.drop_scratch(key, sid, lease)
-                continue
+        # A warm one is reused however long it was idle: its lease is renewed
+        # (lease_renewal.py); idle ones are let go on memory pressure instead.
+        try:
+            sid, lease, _ = queue.get_nowait()
+        except asyncio.QueueEmpty:
+            pass
+        else:
             self.registry.touch(sid)
             return sid, lease
         async with self._scratch_lock:
@@ -450,6 +449,7 @@ class LspPool(GymClientMixin):
                 heap_session=heap_session or None,
                 label=f"scratch:{task_group}:{heap_session or 'plain'}",
             )
+            lease_renewal.ensure(self)
             self.registry.register(
                 resp["session_id"],
                 resp["lease_id"],

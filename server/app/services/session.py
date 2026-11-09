@@ -54,6 +54,7 @@ class _Isabelle_Session:
         self.field = session_field
         self.created_at = time.time()
         self.last_activity = time.time()
+        self.lease_renewed_at = 0.0  # POST .../renew_lease: the holder is alive, not the session used
         self.status = SessionStatus.ACTIVE
         self.backend: ThreadedBackend = backend
 

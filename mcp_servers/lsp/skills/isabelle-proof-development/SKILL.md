@@ -32,7 +32,8 @@ Load a tool with ToolSearch when a rule calls for it; its description says how t
    alternative or `sorry` and check again, before anything else.
 6. The proof is done when `isabelle_diagnostic_messages` reports no errors and no `still_running`
    and `grep` finds no `sorry` in the file. Then run the task's batch build once, saving its output
-   with `tee`.
+   with `tee`. The batch build reports errors but not the output of commands such as
+   `thm_oracles`; read that with `isabelle_query`.
 
 ## Finding a step
 

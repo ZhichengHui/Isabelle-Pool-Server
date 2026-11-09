@@ -287,3 +287,14 @@ async def get_session_stats(session_id: str, session: LeasedSession):
         "success_rate": (successful / len(session.command_history)) if session.command_history else 0,
         "checkpoints_saved": len(session.checkpoints),
     }
+
+
+@router.post("/api/v1/sessions/{session_id}/renew_lease")
+async def renew_lease(session_id: str, session: LeasedSession):
+    """Keep a lease alive without using the session: the abandoned-lease rule
+    (``ISABELLE_MAX_LEASE_AGE``) counts from the later of the last use and the
+    last renewal. A client that holds sessions it has not used for a while (warm
+    spares) renews them; a client that dies stops renewing and is reaped."""
+    session.lease_renewed_at = time.time()
+    return {"success": True, "session_id": session_id,
+            "lease_expires_in_s": Server.MAX_LEASE_AGE}

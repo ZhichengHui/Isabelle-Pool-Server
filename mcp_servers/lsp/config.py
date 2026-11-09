@@ -44,10 +44,13 @@ class Config:
     # spare is a held Isabelle session (memory). 0 disables.
     SCRATCH_SPARE: int = env_int(_P, "SCRATCH_SPARE", 4)
 
-    # Warm scratch sessions idle longer than this are closed on the next
-    # acquire / reminder (they are leased, so the server never evicts them —
-    # the MCP must let go itself).
-    SCRATCH_IDLE_S: float = env_float(_P, "SCRATCH_IDLE_S", 300.0)
+    # Every session this MCP holds (open files and warm scratch sessions) has its
+    # lease renewed this often while the MCP runs (lease_renewal.py), so the
+    # server's abandoned-lease rule (ISABELLE_MAX_LEASE_AGE) closes only sessions
+    # of a client that died. Keep it well below that age. 0 disables. Warm
+    # scratch sessions are let go on memory pressure (warning/critical reminder)
+    # or isabelle_release_idle, not after an idle time.
+    LEASE_RENEW_S: float = env_float(_P, "LEASE_RENEW_S", 60.0)
     # A held session counts as "idle" for memory advice and reminders after
     # this many seconds without a tool call.
     ADVICE_IDLE_S: int = env_int(_P, "ADVICE_IDLE_S", 120)

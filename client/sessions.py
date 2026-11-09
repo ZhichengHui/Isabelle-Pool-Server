@@ -84,6 +84,17 @@ class SessionsMixin(ClientBase):
             return response.json()
         return {}
 
+    async def renew_lease(
+        self, session_id: str, *, lease_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Keep a held session's lease alive without using the session."""
+        response = await self._request(
+            "POST", f"{BASE_URL}/{session_id}/renew_lease",
+            headers=self._lease_headers(lease_id),
+        )
+        response.raise_for_status()
+        return response.json()
+
     async def enter_theory(
         self, session_id: str, theory_name: str, *,
         imports: list[str] | None = None, lease_id: str | None = None,
