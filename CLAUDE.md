@@ -308,7 +308,7 @@ ISABELLE_HEAP_POOL_DIR=/root/.isabelle/heap_pool      # default is host-aware: ~
 ISABELLE_HEAP_POOL_ALLOWED_ROOTS=/app:/root/.isabelle      # default is host-aware: <repo>:~/.isabelle (= this in the container)
 
 # Proof state and field
-ISABELLE_SHOW_STATES=true          # Include raw proof states in responses (default true)
+ISABELLE_SHOW_STATES=true          # Record the proof state after each command (default true); isabelle_goal reads it and answers with an error when false
 ISABELLE_DEFAULT_FIELD=HOL         # Default field if not specified (default HOL)
 
 # Server and logging

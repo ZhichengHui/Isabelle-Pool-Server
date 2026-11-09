@@ -73,11 +73,11 @@ Read-only (each syncs first):
 | Tool | What it does |
 |---|---|
 | `isabelle_diagnostic_messages(file_path, severity?)` | Per-command errors/warnings with line/col ranges + status (severity filter: `error`/`warning`) |
-| `isabelle_goal(file_path, line)` | Goal state before/after the command at `line` |
+| `isabelle_goal(file_path, line)` | Goal state before/after the command that starts at the first non-blank character of `line` (a line inside a command, blank or a comment maps to the command before it); needs `ISABELLE_SHOW_STATES=true` (the default), otherwise the result carries an error instead of empty goals |
 | `isabelle_command_at_line(file_path, line)` | The command containing `line` (+ range) |
 | `isabelle_proof_state(file_path)` | Tip subgoals / proof_finished / pending_qed |
 | `isabelle_source(file_path)` | The source as the prover sees it |
-| `isabelle_query(file_path, command)` | One read-only query command — `thm`, `term`, `prop`, `typ`, `prf`, `find_theorems`, `find_consts`, `find_*`, any `print_*` (guarded server-side; ML/IO rejected) |
+| `isabelle_query(file_path, command)` | One read-only query command — `thm`, `term`, `prop`, `typ`, `prf`, `find_theorems`, `find_consts`, `find_*`, any `print_*` (guarded server-side; ML/IO rejected). Returns only the query's own output; runs before the file's final `end` (or after the last command if there is none), so facts of a closed `context`/locale need their qualified name |
 | `isabelle_local_facts(file_path)` / `isabelle_global_facts(file_path, limit?)` | Proof-context vs theory-level facts |
 | `isabelle_hover_info(file_path, line, column)` | Entity kind + type/statement |
 | `isabelle_definition(file_path, line, column)` | Def positions: file targets (heap/distribution sources) or in-node line ranges (entities defined in the file itself) |
@@ -91,7 +91,7 @@ Scratch execution (never touch the file session; warm pool keyed by
 task_group/heap/imports/field, `ISABELLE_MCP_LSP_SCRATCH_POOL_SIZE`):
 | Tool | What it does |
 |---|---|
-| `isabelle_multi_attempt(file_path, line, candidates, timeout?)` | File prefix before `line` + each candidate, verified concurrently on scratch sessions (bounded by `ISABELLE_MCP_LSP_MAX_PARALLEL`); per-candidate success/proof_open/failed commands (candidate-relative lines) |
+| `isabelle_multi_attempt(file_path, line, candidates, timeout?)` | File prefix before `line` + each candidate, verified concurrently on scratch sessions (bounded by `ISABELLE_MCP_LSP_MAX_PARALLEL`); `line` is 1 to the line count + 1 (the last value appends after the end of the file), else an error; per-candidate success/proof_open/pending_qed, `used_sorry` of the candidate itself (`prefix_used_sorry` when the text before `line` has one), `failed` commands with complete error messages (candidate-relative lines; `prefix_failed` for the text before `line`) and, for an open proof, the remaining `subgoals` |
 | `isabelle_run_code(chunk, imports?, task_group?, heap_session?, timeout?)` | Independent snippet on a scratch session (own `theory` header or body of a scratch theory importing `imports`, default Main) |
 
 Spare scratch sessions (`scratch_spare.py`, `ISABELLE_MCP_LSP_SCRATCH_SPARE`, default 4, 0 = off):
