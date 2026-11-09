@@ -14,26 +14,22 @@ Load a tool (ToolSearch) when a rule below calls for it; its description says ho
 | `isabelle_open` | Binds the file to an Isabelle session and checks it. | Once per file, before the other file tools. |
 | `isabelle_diagnostic_messages` | Re-checks the file from the first changed command and reports errors, warnings and `still_running`. | After every edit of the file. |
 | `isabelle_goal` | The goals before (`goals_before`) and after (`goals_after`) the command at a line. | Before writing a step, to read the goal it must prove. |
-| `isabelle_multi_attempt` | Checks the file's text before a line followed by each candidate, each on its own session with a time limit; the file is not changed. | To test a step you wrote yourself before writing it into the file. |
+| `isabelle_multi_attempt` | Checks the file's text before a line followed by each candidate, each on its own session with a time limit, and reports for each whether it succeeded and which goals it leaves; the file is not changed. | To test a step you wrote yourself before writing it into the file. |
 | `isabelle_sledgehammer` | Searches a proof of a goal (at a line, optionally one subgoal) with external provers and returns proof-method suggestions. | When the standard methods fail on a goal. |
 | `isabelle_fill_sorries`, `isabelle_fill_status`, `isabelle_fill_cancel` | Runs sledgehammer on every `sorry` of the file on the server and returns the patched text; collects a job that is still running; stops a job. | For a `sorry` skeleton. |
 | `isabelle_query` | Runs a read-only command (`find_theorems`, `find_consts`, `thm`, `term`, …) at the end of the file. | To find lemmas and constants. |
-| `isabelle_release_idle`, `isabelle_memory_status` | Frees idle sessions; reports who holds the prover's memory. | When a result reports `memory_pressure` or a memory reminder. |
-| `isabelle_heap_status`, `isabelle_build_heap` | List the available session images; build one from a project directory. | When the file imports theories of a project directory that has no ready image. |
 
 ## Workflow
 
-1. If the file imports theories of a project directory without a ready image (`isabelle_heap_status`),
-   build it with `isabelle_build_heap`. Then `isabelle_open` the file, with `heap_session` if it
-   needs that image.
+1. `isabelle_open` the file.
 2. For each step: read its goal with `isabelle_goal` (`goals_before` at its `sorry` placeholder, or
    `goals_after` of the command before it), find a step that proves it (next section), and write it
    into the file.
 3. After every edit, check the file with `isabelle_diagnostic_messages` and fix what it reports.
 4. The proof is complete when `isabelle_diagnostic_messages` reports no errors and no
    `still_running`, and the file contains no `sorry` (check with `grep`). Then run the task's batch
-   build command in the shell, once; if it fails, fix what it reports as in step 3. If the task gives
-   no batch build command, skip it. Do not use the batch build to test steps.
+   build command in the shell once, saving its output if you need it (`| tee <file>`); if it fails,
+   fix what it reports as in step 3. If the task gives no batch build command, skip it.
 
 Write into the file only:
 - a candidate whose `isabelle_multi_attempt` result is `success`, or, for a step that does not close
@@ -43,6 +39,9 @@ Write into the file only:
 - the structure of a `sorry` skeleton, with `sorry` as the placeholders.
 
 ## Finding a step that proves a goal
+
+If the project has a skill or worked examples for the goal's domain (for example a program logic),
+follow them first; use the steps below for the goals they leave.
 
 For each goal, do these in order and stop at the first that succeeds. Steps 1 and 2 run once per
 goal.
@@ -68,17 +67,12 @@ goal.
 
 ## Time limit
 
-- Every step must finish within 10 seconds; a result with `timed_out` counts as failed.
+- Every step must finish within 10 seconds, unless the project's skill sets another limit for its
+  automation; a result with `timed_out` counts as failed.
 - `still_running` means the last check of the file stopped with these commands unfinished; they and
   the commands after them are unchecked. Replace the step at the smallest listed line with a tested
   alternative or `sorry`, then check again. Do this before any `isabelle_query` on the file: a query
   waits until the running commands finish.
-
-## Memory
-
-When a result reports `memory_pressure` or a memory reminder, call `isabelle_release_idle` and retry
-the failed call. If it fails again, call `isabelle_memory_status`; if the memory is held by others,
-stop and report it.
 
 ## Searching
 
