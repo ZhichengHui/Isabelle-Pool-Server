@@ -25,6 +25,7 @@ from ..common import translate_http_error
 from .config import Config
 from .pool import attempt_prefix, field_for, header_fields, header_text
 
+from . import scratch_spare
 from . import fill_tools  # noqa: F401  (registers the fill_sorries tools on `mcp`)
 from . import memory_tools  # noqa: F401  (registers the memory tools on `mcp`)
 from .server import ALWAYS_LOAD, TOOLS, _attach_still_running, _bound_synced, mcp, pool, synced_tool, tool  # noqa: F401
@@ -48,6 +49,7 @@ async def isabelle_open(
     """
     binding = await pool.get_binding(file_path, task_group, heap_session, label)
     reloaded = await pool.sync(binding)
+    scratch_spare.schedule_for_binding(pool, binding)
     rep = binding.last_report or {}
     return _attach_still_running(_j({
         "opened": binding.file_path,
@@ -93,13 +95,27 @@ async def isabelle_sync(file_path: str) -> str:
 
 # ------------------------------------------------------------- read-only tools
 
+def _file_used_sorry(rep: Dict[str, Any]) -> Optional[bool]:
+    """Whether the file's last report shows an executed `sorry`/`oops`: the backend lists their
+    lines for the WHOLE file (`sorry_lines`), whereas `used_sorry` covers only the commands the
+    last (possibly incremental) check re-processed."""
+    lines = rep.get("sorry_lines")
+    return rep.get("used_sorry") if lines is None else bool(lines)
+
+
 @synced_tool(meta=ALWAYS_LOAD)
 async def isabelle_diagnostic_messages(file_path: str, severity: Optional[str] = None) -> str:
     """Per-command diagnostics of the file as the prover sees it: for every
     command with an error/warning message — its line, column range, kind,
     status (ok/failed/running/unprocessed), severity, and text.
 
-    severity: 'error' | 'warning' | None (both). """
+    severity: 'error' | 'warning' | None (both).
+
+    used_sorry is true iff a `sorry` (or `oops`) command of the file was executed — it
+    covers the whole file, also when the last edit re-checked only the end of it. A
+    `sorry` in a comment, or in a proof that was not reached, does not count. Automation
+    that emits long warnings (such as `crush_base`) makes the full list long: pass
+    severity='error' to read only the errors. """
     binding, _ = await _bound_synced(file_path)
     rep = binding.last_report or {}
     out = []
@@ -126,7 +142,7 @@ async def isabelle_diagnostic_messages(file_path: str, severity: Optional[str] =
         "messages": out,
         "success": rep.get("success"),
         "proof_open": rep.get("proof_open"),
-        "used_sorry": rep.get("used_sorry"),
+        "used_sorry": _file_used_sorry(rep),
     }
     if not rep:
         result["note"] = "no report yet — call isabelle_sync first"
@@ -135,9 +151,18 @@ async def isabelle_diagnostic_messages(file_path: str, severity: Optional[str] =
 
 @synced_tool(meta=ALWAYS_LOAD)
 async def isabelle_goal(file_path: str, line: int) -> str:
-    """Goal state before/after the command containing `line`:
+    """Goal state before/after the command containing `line` (1-based):
     {found, command, goals_before, goals_after}. The right call before writing
-    the next proof step. """
+    the next proof step.
+
+    The command is the one that STARTS at the first non-blank character of the line (an
+    indented `apply` is found on its own line); a line inside a multi-line command, a blank
+    line or a comment maps to the command before it, and `command.range` says which one it
+    is. goals_before is the proof state after the previous command, goals_after the state
+    after this one — each one text with all subgoals, empty outside a proof and for a
+    command that failed. If the server does not record proof states (it was started with
+    ISABELLE_SHOW_STATES=false) the result carries an error saying so instead of empty
+    goals. """
     binding, _ = await _bound_synced(file_path)
     return _j(await pool.call(
         binding, lambda c, sid: c.goals_at_line(sid, line, lease_id=binding.lease_id)))
@@ -177,6 +202,17 @@ async def isabelle_query(file_path: str, command: str) -> str:
     find_*, and any print_* inspector (print_theorems, print_facts,
     print_statement, print_simpset, ...). Code-executing / IO commands (ML,
     setup, *_file, ...) are rejected. Transient: the proof script is untouched.
+    Only the query's own output is returned, and `success` and `error` concern the
+    query alone: messages of the other commands of the file (warnings, output) are not
+    included.
+
+    The query runs at the end of the file, after its commands: before the file's final
+    `end`, or appended after the last command when the file does not end with `end`. A
+    `context ... begin ... end` or locale block that is already closed at that point is
+    outside the query, so refer to its facts and constants by their qualified name
+    (`thm my_locale.my_def`, not `thm my_def`); a block still open at the end of the file
+    is inside it. While a command of the file is still running (`still_running`), the
+    query waits for it.
     """
     binding, _ = await _bound_synced(file_path)
     return _j(await pool.call(
@@ -303,12 +339,24 @@ async def isabelle_multi_attempt(
     """Try several proof-step candidates at a position, each on an ISOLATED warm
     scratch session — the file and its session are never modified.
 
-    Takes the file's text BEFORE `line` (1-based), appends each candidate, and
-    verifies it (per-command report). Candidates run concurrently (bounded by
-    ISABELLE_MCP_LSP_MAX_PARALLEL and the scratch pool size). Per candidate:
-    success / proof_open / pending_qed / used_sorry / timed_out and the failed
-    or still-running commands with messages. Lines in `failed` are
-    candidate-relative (candidate line 1 = file line `line`). MEMORY: a
+    Takes the file's text BEFORE `line`, appends each candidate, and verifies it
+    (per-command report). `line` is 1 to the number of lines of the file plus 1; the
+    number of lines plus 1 appends the candidate after the end of the file (after a
+    final `end` a candidate has no theory to run in), any other value is an error.
+    Candidates run concurrently (bounded by ISABELLE_MCP_LSP_MAX_PARALLEL and the
+    scratch pool size). Per candidate:
+    - success / proof_open / pending_qed / timed_out for the whole text (file part
+      before `line` plus candidate);
+    - used_sorry: a `sorry` (or `oops`) of the CANDIDATE was executed;
+      prefix_used_sorry: one of the file text before `line` was (the key is there
+      only when it is true);
+    - failed: the failed or still-running commands of the candidate with their
+      complete error messages (warnings are not included); `candidate_line` 1 is
+      file line `line`. A failed or running command before `line` is listed in
+      prefix_failed with its file `line`;
+    - subgoals (only when proof_open or pending_qed): the goals the candidate
+      leaves, one text per subgoal, so the next step can be chosen without writing
+      the candidate into the file. MEMORY: a
     candidate result with error memory_pressure, or a memory_reminder on the
     answer, means the prover server is short of memory — call
     isabelle_release_idle(), then retry; if the advice says the memory is
@@ -316,6 +364,13 @@ async def isabelle_multi_attempt(
     """
     binding, _ = await _bound_synced(file_path)
     text = binding.cached_text or ""
+    n_lines = len(text.splitlines())
+    if not isinstance(line, int) or isinstance(line, bool) or not 1 <= line <= n_lines + 1:
+        return _j({
+            "error": "line_out_of_range",
+            "detail": f"line must be between 1 and {n_lines + 1}: the file has {n_lines} lines "
+                      f"and line {n_lines + 1} appends the candidate at its end (got {line!r})",
+        })
     prefix = attempt_prefix(text, line)
     c = await pool.client()
     imports, suggested = await header_fields(c, text)
@@ -334,27 +389,51 @@ async def isabelle_multi_attempt(
                     rep_result = await c.load_document(
                         sid, prefix + candidate, report=True,
                         timeout=budget, lease_id=lease)
-                rep = rep_result.get("report") or {}
-                bad = []
+                    rep = rep_result.get("report") or {}
+                    subgoals = None
+                    if rep.get("proof_open") or rep.get("pending_qed"):
+                        try:
+                            state = await c.get_proof_state(sid, lease_id=lease)
+                            subgoals = state.get("subgoals") or []
+                        except Exception:  # noqa: BLE001  (the goals are an extra, not the verdict)
+                            subgoals = None
+                bad, prefix_bad = [], []
                 for cmd in rep.get("commands", []) or []:
                     if cmd.get("status") in ("failed", "running"):
-                        msgs = "; ".join(
-                            (m.get("text", "") or "")[:200] for m in (cmd.get("messages") or []))
-                        bad.append({
-                            "candidate_line": (cmd.get("line") or 0) - (line - 1),
+                        msgs = cmd.get("messages") or []
+                        errors = [m for m in msgs if m.get("sev") == "error"] or msgs
+                        entry = {
                             "kind": cmd.get("kind"),
                             "status": cmd.get("status"),
-                            "messages": msgs,
-                        })
-                return {
+                            "messages": "\n".join(m.get("text", "") or "" for m in errors),
+                        }
+                        file_line = cmd.get("node_line") or cmd.get("line") or 0
+                        if file_line >= line:
+                            bad.append({"candidate_line": file_line - (line - 1), **entry})
+                        else:
+                            prefix_bad.append({"line": file_line, **entry})
+                sorry_lines = rep.get("sorry_lines")
+                if sorry_lines is None:  # a backend without the whole-text list
+                    used_sorry, prefix_used_sorry = rep.get("used_sorry"), False
+                else:
+                    used_sorry = any(n >= line for n in sorry_lines)
+                    prefix_used_sorry = any(n < line for n in sorry_lines)
+                result = {
                     "candidate": candidate,
                     "success": rep.get("success"),
                     "proof_open": rep.get("proof_open"),
                     "pending_qed": rep.get("pending_qed"),
-                    "used_sorry": rep.get("used_sorry"),
+                    "used_sorry": used_sorry,
                     "timed_out": rep.get("timed_out"),
                     "failed": bad,
                 }
+                if prefix_used_sorry:
+                    result["prefix_used_sorry"] = True
+                if prefix_bad:
+                    result["prefix_failed"] = prefix_bad
+                if subgoals is not None:
+                    result["subgoals"] = subgoals
+                return result
             except httpx.HTTPStatusError as e:
                 # A memory 503 (the scratch create is the gated call) becomes the
                 # structured candidate: error=memory_pressure + advice (review d2bc679 B1).
@@ -370,6 +449,7 @@ async def isabelle_multi_attempt(
                 return {"candidate": candidate, "error": f"{type(e).__name__}: {e}"}
 
     results = await asyncio.gather(*(try_one(cand) for cand in candidates))
+    scratch_spare.ensure(pool, key, text)  # top the warm, loaded spares up again
     return _j(list(results))
 
 

@@ -28,6 +28,23 @@ _gateway_lock = threading.Lock()
 logger = get_logger(__name__)
 
 
+def _factory_call(gw, loaded_theories, session_dirs, field: str):
+    java_list = gw.gateway.jvm.java.util.ArrayList()
+    for thy in loaded_theories:
+        java_list.add(thy)
+    java_dirs = gw.gateway.jvm.java.util.ArrayList()
+    for d in session_dirs or []:
+        java_dirs.add(d)
+    return gw.get_repl_backend_with_initial_theories(
+        show_states=Server.SHOW_STATES,
+        enable_cache=Server.ENABLE_CACHE,
+        max_cache_size=Server.MAX_CACHE_SIZE,
+        initial_thys=java_list,
+        field=field,
+        session_dirs=java_dirs,
+    )
+
+
 class SessionManagerHelpersMixin:
     # Created in SessionManager.__init__ / provided by MemoryPolicyMixin; declared
     # here for the memory-aware listing and sweep code (mypy strict).
@@ -62,6 +79,18 @@ class SessionManagerHelpersMixin:
         except Exception as e:
             logger.exception("failed to start REPL gateway")
             raise GatewayUnavailable(f"{where}: failed to start REPL gateway: {e}") from e
+
+    def create_raw_backend(self, loaded_theories, session_dirs, field: str):
+        """The Py4J factory call that starts one session backend (a worker thread).
+        With Server.PARALLEL_SESSION_CREATE the gateway lock is held only to read the
+        gateway (against a concurrent rebuild), so several sessions start at once;
+        otherwise the whole call holds it and sessions start one at a time."""
+        if Server.PARALLEL_SESSION_CREATE:
+            with _gateway_lock:
+                gw = self.gateway
+            return _factory_call(gw, loaded_theories, session_dirs, field)
+        with _gateway_lock:
+            return _factory_call(self.gateway, loaded_theories, session_dirs, field)
 
     #: Seconds a functional liveness result is cached, so health probes don't
     #: pay a Py4J round-trip per request.

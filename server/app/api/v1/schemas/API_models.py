@@ -363,7 +363,7 @@ class CommandAtLineResponse(BaseModel):
 class GoalsResponse(BaseModel):
     """Read-only query: rendered goal state before/after the command containing a
     1-based line. State messages only exist with show_states on
-    (ISABELLE_SHOW_STATES, default true); with it off the goal lists are empty.
+    (ISABELLE_SHOW_STATES, default true); with it off the goal lists are empty and `error` says so.
     `goals_after` is the command's last state message as one raw text element (no
     subgoal splitting); `goals_before` likewise for the previous non-ignored command."""
     found: bool

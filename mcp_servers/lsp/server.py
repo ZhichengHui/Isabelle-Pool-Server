@@ -16,6 +16,7 @@ from mcp.server.fastmcp import FastMCP
 from ..common import ToolNames, dump_json, make_guard
 from .config import Config
 from .pool import LspPool
+from . import scratch_spare
 
 _INSTRUCTIONS = f"""\
 Isabelle Pool Server: checks Isabelle/HOL theory (.thy) files on warm Isabelle sessions. Use these \
@@ -130,7 +131,8 @@ def _attach_still_running(out: Any, file_path: Any) -> Any:
         f"The last check of this file stopped after {Config.LOAD_TIMEOUT:.0f} s because these "
         "commands were still running: their results are missing, and the results of other "
         "commands may be incomplete. A command that keeps running (e.g. metis or auto that "
-        "does not terminate) makes every check of the file wait this long until it is changed."
+        "does not terminate) makes every check of the file wait this long until it is changed, "
+        "and every isabelle_query on the file waits for it."
     )
     return dump_json(result)
 
@@ -139,4 +141,5 @@ async def _bound_synced(file_path: str):
     """get_binding + sync — the preamble of every file-scoped tool."""
     binding = await pool.get_binding(file_path)
     reloaded = await pool.sync(binding)
+    scratch_spare.schedule_for_binding(pool, binding)
     return binding, reloaded

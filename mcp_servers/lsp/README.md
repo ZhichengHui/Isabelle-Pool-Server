@@ -20,6 +20,17 @@ search loads only tool names and server instructions at session start. `isabelle
 `isabelle_diagnostic_messages` and `isabelle_goal` carry `_meta` `anthropic/alwaysLoad`, so
 Claude Code loads them upfront; the other tools stay deferred.
 
+## Skill for agents
+
+`skills/isabelle-proof-development/SKILL.md` is a Claude Code skill on developing proofs with this
+MCP: locating with `isabelle_diagnostic_messages` and iterating with `isabelle_multi_attempt`, the
+order quick attempts → `isabelle_sledgehammer` → `sorry` skeleton with `isabelle_fill_sorries`,
+not guessing `metis` calls, a 10-second limit per proof step and what to do on `still_running`,
+searching with `isabelle_query`, and running the batch build only as the final check. Install it by copying the directory to `~/.claude/skills/` (or a project's
+`.claude/skills/`). It draws on the public `isabelle-proof-development` skill, kappelmann's
+`isabelle` skill (isabelle-pide-ai), yonoteam's `proving-with-sorry-skeletons` and AutoCorrode's
+`ic2` skill, mapped onto this MCP's tools.
+
 ## Sync model (copied buffer)
 
 The MCP never writes files. Per open file it keeps a text cache; **every
@@ -62,11 +73,11 @@ Read-only (each syncs first):
 | Tool | What it does |
 |---|---|
 | `isabelle_diagnostic_messages(file_path, severity?)` | Per-command errors/warnings with line/col ranges + status (severity filter: `error`/`warning`) |
-| `isabelle_goal(file_path, line)` | Goal state before/after the command at `line` |
+| `isabelle_goal(file_path, line)` | Goal state before/after the command that starts at the first non-blank character of `line` (a line inside a command, blank or a comment maps to the command before it); needs `ISABELLE_SHOW_STATES=true` (the default), otherwise the result carries an error instead of empty goals |
 | `isabelle_command_at_line(file_path, line)` | The command containing `line` (+ range) |
 | `isabelle_proof_state(file_path)` | Tip subgoals / proof_finished / pending_qed |
 | `isabelle_source(file_path)` | The source as the prover sees it |
-| `isabelle_query(file_path, command)` | One read-only query command — `thm`, `term`, `prop`, `typ`, `prf`, `find_theorems`, `find_consts`, `find_*`, any `print_*` (guarded server-side; ML/IO rejected) |
+| `isabelle_query(file_path, command)` | One read-only query command — `thm`, `term`, `prop`, `typ`, `prf`, `find_theorems`, `find_consts`, `find_*`, any `print_*` (guarded server-side; ML/IO rejected). Returns only the query's own output; runs before the file's final `end` (or after the last command if there is none), so facts of a closed `context`/locale need their qualified name |
 | `isabelle_local_facts(file_path)` / `isabelle_global_facts(file_path, limit?)` | Proof-context vs theory-level facts |
 | `isabelle_hover_info(file_path, line, column)` | Entity kind + type/statement |
 | `isabelle_definition(file_path, line, column)` | Def positions: file targets (heap/distribution sources) or in-node line ranges (entities defined in the file itself) |
@@ -80,8 +91,21 @@ Scratch execution (never touch the file session; warm pool keyed by
 task_group/heap/imports/field, `ISABELLE_MCP_LSP_SCRATCH_POOL_SIZE`):
 | Tool | What it does |
 |---|---|
-| `isabelle_multi_attempt(file_path, line, candidates, timeout?)` | File prefix before `line` + each candidate, verified concurrently on scratch sessions (bounded by `ISABELLE_MCP_LSP_MAX_PARALLEL`); per-candidate success/proof_open/failed commands (candidate-relative lines) |
+| `isabelle_multi_attempt(file_path, line, candidates, timeout?)` | File prefix before `line` + each candidate, verified concurrently on scratch sessions (bounded by `ISABELLE_MCP_LSP_MAX_PARALLEL`); `line` is 1 to the line count + 1 (the last value appends after the end of the file), else an error; per-candidate success/proof_open/pending_qed, `used_sorry` of the candidate itself (`prefix_used_sorry` when the text before `line` has one), `failed` commands with complete error messages (candidate-relative lines; `prefix_failed` for the text before `line`) and, for an open proof, the remaining `subgoals` |
 | `isabelle_run_code(chunk, imports?, task_group?, heap_session?, timeout?)` | Independent snippet on a scratch session (own `theory` header or body of a scratch theory importing `imports`, default Main) |
+
+Spare scratch sessions (`scratch_spare.py`, `ISABELLE_MCP_LSP_SCRATCH_SPARE`, default 4, 0 = off):
+after a file is first bound, and again after each `isabelle_multi_attempt`, the MCP prepares in
+the background min(`..._SCRATCH_SPARE`, `..._MAX_PARALLEL`) idle scratch sessions for the file's
+context (within `..._SCRATCH_POOL_SIZE`), already loaded with the file's text. The candidates of
+a multi_attempt run in parallel, so the call is as slow as its slowest candidate: spares help only
+if every candidate finds one, which is why as many are kept as candidates can run at once
+(measured on an AutoCorrode file: 1 candidate with a spare 0.4 s, without 40 s; 2 candidates with
+only 1 spare still 39 s). A candidate on a spare neither waits for a new session
+nor checks the prefix from the start (its load takes the server's incremental path). The context
+comes from the file's own header, so nothing is configured per heap. Each spare is a held Isabelle
+session (memory; the memory reminder closes idle ones first). A refused or failed preparation
+(memory pressure, the pool at its cap) only means fewer spares.
 
 Heap pool:
 | Tool | What it does |
@@ -108,6 +132,7 @@ parser (client wrapper: `async_client.parse_theory_header`).
 | `..._ATTEMPT_TIMEOUT` | 180 | per-candidate/run_code budget (s) |
 | `..._MAX_PARALLEL` | 4 | multi_attempt fan-out cap |
 | `..._SCRATCH_POOL_SIZE` | 4 | warm scratch sessions per context |
+| `..._SCRATCH_SPARE` | 4 | idle scratch sessions kept ready per context, loaded with the file: min(this, `MAX_PARALLEL`) (0 = off) |
 | `..._CLOSE_DESTROYS` | false | `isabelle_close` destroys (teardown) instead of warm-releasing |
 | `..._FILL_TIMEOUT_S` / `..._FILL_MAX_TOTAL_S` | 30 / 600 | fill_sorries: sledgehammer budget per `sorry` / wall budget per job (server defaults `ISABELLE_FILL_*`) |
 | `..._FILL_PATIENCE_S` / `..._FILL_POLL_S` | 240 / 3 | how long `isabelle_fill_sorries` waits before returning `continuing: true` (keep ≤ the MCP client's tool timeout − 60) / poll interval |

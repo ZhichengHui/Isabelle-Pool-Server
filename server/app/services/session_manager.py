@@ -243,21 +243,9 @@ class SessionManager(SessionManagerHelpersMixin, MemoryPolicyMixin, FillJobMixin
                     # ALL Py4J traffic (including building the ArrayList) stays
                     # in this worker thread: a synchronous gateway call on the
                     # event loop froze the whole server when the JVM was busy.
-                    with _gateway_lock:
-                        java_list = self.gateway.gateway.jvm.java.util.ArrayList()
-                        for thy in loaded_theories:
-                            java_list.add(thy)
-                        java_dirs = self.gateway.gateway.jvm.java.util.ArrayList()
-                        for d in (session_dirs or []):
-                            java_dirs.add(d)
-                        return self.gateway.get_repl_backend_with_initial_theories(
-                            show_states=Server.SHOW_STATES,
-                            enable_cache=Server.ENABLE_CACHE,
-                            max_cache_size=Server.MAX_CACHE_SIZE,
-                            initial_thys=java_list,
-                            field=normalized_field,
-                            session_dirs=java_dirs,
-                        )
+                    return self.create_raw_backend(
+                        loaded_theories, session_dirs, normalized_field
+                    )
 
                 try:
                     raw_backend = await asyncio.wait_for(

@@ -96,6 +96,44 @@ object Document_Utils {
       })
   }
 
+  /** Results of ONE transient query command (probe_transient), into Repl_Output: its
+   *  writeln output as output, its errors as errors. Its warnings go to the output with a
+   *  "Warning:" prefix (a warning of the query is not a failure of the query), and proof
+   *  state messages are left out (a query shows what it was asked for, not the state). */
+  private def print_query_results(results: Command.Results): Unit =
+    results.iterator.foreach(_._2 match {
+      case XML.Elem(Markup(markup_type, _), body) =>
+        val text = Pretty.string_of(body)
+        if (text.nonEmpty)
+          markup_type match {
+            case Markup.WRITELN_MESSAGE => Repl_Output.add_output(text)
+            case Markup.ERROR_MESSAGE   => Repl_Output.add_error(text)
+            case Markup.WARNING_MESSAGE => Repl_Output.add_output("Warning: " + text)
+            case Markup.STATE_MESSAGE   => ()
+            case _                      => Repl_Output.add_output(text)
+          }
+      case _ => ()
+    })
+
+  /** Like output_node_results, but ONLY for the commands starting at/after
+   *  `since_line` — the transient query command appended at the end of the node. The
+   *  messages of the commands before it (warnings of the proof script, the state of
+   *  the last proof step) are not part of the query's answer. Same wait and return
+   *  value as output_node_results. */
+  def output_query_results_since(
+      session: Headless.Session,
+      node_name: Document.Node.Name,
+      since_line: Int,
+      budget_ms: Long
+  ): Boolean = {
+    val (node_snapshot, settled) = settled_node_snapshot(session, node_name, budget_ms)
+    node_snapshot.node.commands.foreach { command =>
+      val start_line = node_snapshot.node.command_start_line(command).getOrElse(1)
+      if (start_line >= since_line) print_query_results(node_snapshot.command_results(command))
+    }
+    settled
+  }
+
   /** Print every command's results into Repl_Output (state messages only for commands
    *  at/after `last_insertion_start_line`), after waiting at most `budget_ms` for the
    *  node to settle. Returns false when the budget expired with a command still running
@@ -170,9 +208,7 @@ object Document_Utils {
     val (snapshot, settled) = settled_node_snapshot(session, node_name, budget_ms)
     snapshot.node.command_iterator().toList
       .find { case (_, command_offset) => command_offset == offset }
-      .foreach { case (command, _) =>
-        pretty_print_results(command, snapshot.command_results(command), hide_state_messages = false)
-      }
+      .foreach { case (command, _) => print_query_results(snapshot.command_results(command)) }
     settled
   }
 
@@ -272,6 +308,15 @@ object Document_Utils {
           "end" -> JSON.Object("line" -> r.stop.line1, "col" -> r.stop.column1)))
       } catch { case _: Exception => None }
 
+    def command_status_name(command: Command): String =
+      scala.util.Try(state.command_status(version, command)).toOption match {
+        case Some(s) if s.is_failed          => "failed"
+        case Some(s) if s.maybe_consolidated => "ok"
+        case Some(s) if s.is_running         => "running"
+        case Some(_)                         => "unprocessed"
+        case None                            => "ok" // PIDE advanced past this version
+      }
+
     // Status per reported command, paired with its JSON object. We keep `status` alongside
     // the JSON so `success` can be computed without re-parsing the JSON we just built.
     // command_iterator preserves source order and yields the same command objects as
@@ -281,15 +326,7 @@ object Document_Utils {
         val start_line = snapshot.node.command_start_line(command).getOrElse(1)
         if (start_line < since_line || command.is_ignored) None
         else {
-          val st = scala.util.Try(state.command_status(version, command)).toOption
-          val status =
-            st match {
-              case Some(s) if s.is_failed         => "failed"
-              case Some(s) if s.maybe_consolidated => "ok"
-              case Some(s) if s.is_running        => "running"
-              case Some(_)                        => "unprocessed"
-              case None                           => "ok" // PIDE advanced past this version
-            }
+          val status = command_status_name(command)
           val base_fields: JSON.Object.T = JSON.Object(
             // chunk-relative line (1-based within the submitted chunk), so stuck_line /
             // failed line maps to the text the caller sent — not the absolute line in the
@@ -326,10 +363,23 @@ object Document_Utils {
         (command.span.name == "sorry" || command.span.name == "oops")
     }
 
+    // Whole-node counterpart of used_sorry (independent of `since_line`, so an incremental
+    // report that re-processed only the tail still knows about earlier ones): the absolute
+    // start lines of the `sorry`/`oops` commands that were EXECUTED (status ok), i.e. not
+    // failed, still running or unprocessed. Callers split them by line (prefix vs candidate).
+    val sorry_lines: List[Int] =
+      snapshot.node.commands.toList.flatMap { command =>
+        if (!command.is_ignored && (command.span.name == "sorry" || command.span.name == "oops") &&
+            command_status_name(command) == "ok")
+          snapshot.node.command_start_line(command)
+        else None
+      }.sorted
+
     val fields: JSON.Object.T = JSON.Object(
       "timed_out" -> timed_out,
       "success" -> success,
       "used_sorry" -> used_sorry,
+      "sorry_lines" -> sorry_lines,
       "elapsed_ms" -> (System.currentTimeMillis() - start_ms).toInt,
       "commands" -> cmd_pairs.map(_._2)
     )
@@ -346,9 +396,12 @@ object Document_Utils {
 
   /** Shared core: a fresh stable snapshot of the node plus the command containing
    *  `line` (1-based, matching the chunk-report convention), resolved with jEdit
-   *  cursor semantics (Snapshot.current_command: the command at the line's start
-   *  offset, else the nearest non-ignored command before it — comment and blank
-   *  lines map to the preceding command). None when `line` is out of range. */
+   *  cursor semantics (Snapshot.current_command: the command at the line's first
+   *  non-blank character, else the nearest non-ignored command before it — comment
+   *  and blank lines map to the preceding command). The first non-blank character,
+   *  not column 0: the whitespace in front of an indented command belongs to the
+   *  PRECEDING command's span, so column 0 would answer with the previous command.
+   *  None when `line` is out of range. */
   private def command_containing_line(
       session: Headless.Session,
       node_name: Document.Node.Name,
@@ -358,8 +411,10 @@ object Document_Utils {
     else {
       val snapshot = node_snapshot(session, node_name)  // read-only: results as they are now
       val line_doc = Line.Document(snapshot.node.source)
+      val indent =
+        line_doc.lines.lift(line - 1).map(_.text.takeWhile(c => c == ' ' || c == '\t').length).getOrElse(0)
       for {
-        offset <- line_doc.offset(Line.Position(line = line - 1, column = 0))
+        offset <- line_doc.offset(Line.Position(line = line - 1, column = indent))
         command <- snapshot.current_command(node_name, offset)
         start_offset <- snapshot.node.command_start(command)
       } yield (snapshot, line_doc, command, start_offset)

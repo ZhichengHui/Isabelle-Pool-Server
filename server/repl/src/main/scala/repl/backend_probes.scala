@@ -238,7 +238,7 @@ trait Backend_Probes { this: ReplBackend =>
     }
     else {
       repl_session.send_edit(isar_string)
-      note_timeout(repl_session.output_current_node_results(wall_budget_ms))  // read output first
+      note_timeout(repl_session.output_current_query_results(wall_budget_ms))  // read output first
       repl_session.discard_last_edit()  // then drop the transient command (cancels it if still running)
     }
   }

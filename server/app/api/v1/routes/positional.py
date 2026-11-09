@@ -6,6 +6,7 @@ import time
 
 from fastapi import APIRouter, Query
 
+from server.app.core.config import Server
 from server.app.core.logging import get_logger
 from server.app.services.success_checker import SH_PROVED, classify_sledgehammer
 
@@ -23,6 +24,12 @@ from ..schemas.API_models import (
 from ..serializers import parse_command_range, parse_located_command, to_ascii
 
 router = APIRouter(tags=["positional"])
+
+SHOW_STATES_OFF_ERROR = (
+    "goal states are not recorded: the server runs with ISABELLE_SHOW_STATES=false "
+    "(set it to true and restart the server); use isabelle_proof_state for the state "
+    "at the end of the file"
+)
 logger = get_logger(__name__)
 
 
@@ -45,15 +52,19 @@ async def command_at_line(session: LeasedSession, line: int = Query(..., ge=1)):
 async def goals_at_line(session: LeasedSession, line: int = Query(..., ge=1)):
     """Read-only jEdit-style query: rendered goal state before/after the command
     containing `line` (1-based). Snapshot-based like command_at_line. Requires
-    show_states on (ISABELLE_SHOW_STATES, default true); goal lists are empty
-    otherwise."""
+    show_states on (ISABELLE_SHOW_STATES, default true); with it off no state is
+    recorded and the response says so in `error` instead of returning goal lists
+    that are empty only because of the setting."""
     result = await asyncio.to_thread(session.goals_at_line, line)
+    error = result.get("error")
+    if error is None and not Server.SHOW_STATES:
+        error = SHOW_STATES_OFF_ERROR
     return GoalsResponse(
         found=bool(result.get("found", False)),
         command=parse_located_command(result.get("command")),
         goals_before=[to_ascii(str(g)) for g in (result.get("goals_before") or [])],
         goals_after=[to_ascii(str(g)) for g in (result.get("goals_after") or [])],
-        error=result.get("error"),
+        error=error,
     )
 
 

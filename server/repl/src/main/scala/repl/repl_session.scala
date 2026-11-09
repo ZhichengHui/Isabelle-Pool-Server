@@ -198,6 +198,19 @@ class Repl_Session(session_manager: Session_Manager, initial_thys: List[String] 
       )
     )
 
+  /** Print only the results of the commands of the most recent insertion (the transient
+   *  query of probe_transient) into Repl_Output, waiting at most `budget_ms` for the node
+   *  to settle; false when the budget expired with a command still running. */
+  def output_current_query_results(budget_ms: Long): Boolean =
+    current_thy_info.forall(thy_info =>
+      Document_Utils.output_query_results_since(
+        session,
+        current_thy_node_name,
+        thy_info.last_insertion_line,
+        budget_ms
+      )
+    )
+
   /** The current theory's most recent text edit (None when nothing was inserted
    *  yet, or after replace_document re-based the bookkeeping). Lets `step` tell
    *  whether its send_edit actually inserted before rolling back on timeout. */
