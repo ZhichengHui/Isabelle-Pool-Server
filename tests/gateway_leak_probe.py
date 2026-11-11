@@ -15,6 +15,9 @@ per cycle each:
   abandon     the backend is created and the caller gives up on it, as the server
               does after a creation timeout: on a gateway with tagged backends it
               calls close_backend(tag), on an older one it just drops it
+  prover_killed  the session's poly is killed (SIGKILL), then the backend exit()s:
+              Session.stop completes, Session_Stop reports the nonzero return code
+              as an error; this must not count as a failed stop
   stop_fail   the session's Isabelle.Session.manager thread is stopped first (what
               an OutOfMemoryError in that thread does), then the backend exit()s
 
@@ -30,6 +33,7 @@ import gc
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -37,7 +41,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-SCENARIOS = ("normal", "start_fail", "load_fail", "abandon", "stop_fail")
+SCENARIOS = ("normal", "start_fail", "load_fail", "abandon", "prover_killed", "stop_fail")
 
 # Classes whose live instance counts show a retained session.
 TRACKED = {
@@ -171,6 +175,8 @@ class Probe:
         self.theory = str(theory_dir / PROBE_THEORY)
         self.tagged = self._has("get_repl_backend_tagged")
         self.seq = 0
+        self.jvm_log = gw_mod._gateway_log_dir() / "gateway-jvm.log"
+        self.jvm_log_offset = self.jvm_log.stat().st_size if self.jvm_log.exists() else 0
 
     def _has(self, method: str) -> bool:
         cls = self.jvm.java.lang.Class.forName("repl.ReplBackendGateway")
@@ -236,6 +242,19 @@ class Probe:
                 backend = self._create([self.theory])
                 del backend
                 note = "dropped"
+        elif scenario == "prover_killed":
+            backend = self._create([self.theory])
+            for pid in _descendants(self.java_pid):
+                if _comm(pid) == "poly":
+                    os.kill(pid, signal.SIGKILL)
+            time.sleep(3.0)
+            t0 = time.time()
+            try:
+                backend.exit()
+                note = f"exit ok {time.time() - t0:.1f}s"
+            except Exception as e:
+                note = f"exit raised {type(e).__name__} {time.time() - t0:.1f}s"
+            del backend
         elif scenario == "stop_fail":
             backend = self._create([self.theory])
             self._kill_manager(backend)
@@ -257,7 +276,19 @@ class Probe:
         m["threads"] = self.jcmd.threads()
         m["poly"] = count_poly(self.gw.process.pid)
         m["rss_mb"] = round(_rss_mb(self.java_pid), 1)
+        m["forced_teardowns"] = self._new_log().count("forced teardown")
         return m
+
+    def _new_log(self) -> str:
+        """gateway-jvm.log text written since the previous call."""
+        try:
+            with open(self.jvm_log, "rb") as f:
+                f.seek(self.jvm_log_offset)
+                data = f.read()
+        except OSError:
+            return ""
+        self.jvm_log_offset += len(data)
+        return data.decode("utf-8", "replace")
 
     def close(self) -> None:
         self.gw.terminate()

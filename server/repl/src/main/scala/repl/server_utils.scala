@@ -110,7 +110,7 @@ object Server_Utils {
       } catch {
         case t: Throwable =>
           t match {
-            case _: VirtualMachineError => ReplBackendGateway.note_fatal("session start", t)
+            case _: OutOfMemoryError => ReplBackendGateway.note_fatal("session start", t)
             case _ =>
           }
           error_cell.change(_ => Some(t))
@@ -130,6 +130,11 @@ object Server_Utils {
   session_id
   }
 
+  /** The session's stop failed and the forced teardown left something behind. The
+   *  session is unregistered already: a retry cannot reach it, the caller must
+   *  report it as not stopped. */
+  final class Teardown_Incomplete(msg: String) extends RuntimeException(msg)
+
   def stop_session(
       server_info: Server.Info,
       server: Server,
@@ -143,6 +148,13 @@ object Server_Utils {
     val (session_stop_json, _) =
       try Server_Commands.Session_Stop.command(session)
       catch {
+        case exn: Throwable if session.phase.isInstanceOf[isabelle.Session.Terminated] =>
+          // stop() completed; Session_Stop only reports a nonzero prover return
+          // code (e.g. a killed prover) as Server.Error. Nothing left to tear down.
+          try server.remove_session(session_id)
+          catch { case ERROR(_) => }
+          Output.writeln(s"Stopped session ${session_id}: ${Exn.message(exn)}")
+          return
         case exn: Throwable =>
           // Session.stop() gave up half way (its manager thread is dead, e.g. after
           // an OutOfMemoryError). A retry cannot help: stop() now waits for ever on
@@ -156,8 +168,8 @@ object Server_Utils {
               "forced teardown done")
             return
           }
-          else error(s"Session ${session_id}: stop failed (${Exn.message(exn)}); " +
-            "forced teardown incomplete: " + problems.mkString("; "))
+          else throw new Teardown_Incomplete(s"Session ${session_id}: stop failed " +
+            s"(${Exn.message(exn)}); forced teardown incomplete: " + problems.mkString("; "))
       }
     try server.remove_session(session_id)
     catch { case ERROR(_) => }  // a concurrent stop of the same session removed it

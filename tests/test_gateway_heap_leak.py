@@ -46,16 +46,24 @@ def _check_nothing_retained(report, scenario):
 
 
 @live
-@pytest.mark.parametrize("scenario", ["normal", "start_fail", "load_fail", "abandon", "stop_fail"])
+@pytest.mark.parametrize(
+    "scenario", ["normal", "start_fail", "load_fail", "abandon", "prover_killed", "stop_fail"]
+)
 def test_ended_backends_leave_nothing(scenario):
     sys.path.insert(0, os.path.dirname(__file__))
     import gateway_leak_probe as probe
 
     report = probe.run(cycles=3, scenarios=[scenario], lemmas=100, settle=3.0)
     _check_nothing_retained(report, scenario)
+    steps = [s for s in report["steps"] if s["scenario"] == scenario]
+    teardowns = [s["forced_teardowns"] for s in steps]
     if scenario == "stop_fail":
-        # the forced teardown is not a fatal JVM error
+        # one forced teardown per failed stop; it is not a fatal JVM error
+        assert teardowns == [1] * len(steps), steps
         assert report["alive"] is True
+    else:
+        # a stop that completed (also with a nonzero prover return code) is not forced
+        assert teardowns == [0] * len(steps), steps
     assert report["fatal_error"] in ("", None)
 
 
