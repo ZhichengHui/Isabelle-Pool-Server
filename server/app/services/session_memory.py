@@ -31,6 +31,7 @@ from server.app.core.logging import get_logger
 from server.app.services.internal_models import SessionStatus
 from server.app.services.memory_monitor import proc_matches, read_starttime
 from server.app.services.session import _Isabelle_Session
+from server.repl.src.python import process_tree
 
 logger = get_logger(__name__)
 
@@ -291,6 +292,22 @@ class MemoryAwareSession(SessionMemoryMixin, SessionFillMixin, _Isabelle_Session
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._init_memory()
+
+    def close(self) -> None:
+        """Close the backend (the JVM stops the prover); then, when the ML pid
+        is known and THAT process still runs (the JVM-side stop failed or timed
+        out), end its process tree from here: the whole ``bash -> poly`` group
+        that ``bash_process`` started, SIGTERM then SIGKILL."""
+        pid, starttime = self.ml_pid, self.ml_starttime
+        try:
+            super().close()
+        finally:
+            if pid is not None and proc_matches(pid, starttime):
+                ended = process_tree.kill_trees([process_tree.tree_root(pid)])
+                logger.error(
+                    "prover pid=%s still ran after the backend closed; ended %d process(es)",
+                    pid, len(ended),
+                )
 
 
 def probe_memory(session: Any, now: Optional[float] = None) -> bool:

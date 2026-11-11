@@ -30,7 +30,89 @@ object ReplBackendGateway {
     new ReplBackend(show_states, enable_cache, max_cache_size, field = field)
 
   def get_repl_backend_with_initial_theories(show_states: Boolean, enable_cache: Boolean, max_cache_size: Int, initial_thys: java.util.List[String], field: String = "HOL", session_dirs: java.util.List[String] = java.util.List.of[String]().nn): ReplBackend =
-    new ReplBackend(show_states, enable_cache, max_cache_size, initial_thys.asScala.toList, field = field, session_dirs = session_dirs.asScala.toList)
+    make_backend(None, show_states, enable_cache, max_cache_size, initial_thys, field, session_dirs)
+
+  /* Tagged backends and the reaper.
+
+     The Python server tags every backend with its session id. The tag is
+     registered BEFORE the backend starts its prover, so a backend whose creation
+     the Python side gave up on (timeout, error) can still be found and stopped
+     (close_backend), and the periodic reaper (reap_backends) stops every tagged
+     backend that the Python registry no longer knows. Stopping = shutdown of the
+     backend's Session_Manager: every Isabelle session of it is stopped, which
+     terminates its prover process group. */
+
+  private val registry_lock = new Object
+  private var registry_seq = 0L
+  private val registry = scala.collection.mutable.Map.empty[String, (Long, Session_Manager)]
+
+  private def make_backend(tag: Option[String], show_states: Boolean, enable_cache: Boolean,
+      max_cache_size: Int, initial_thys: java.util.List[String], field: String,
+      session_dirs: java.util.List[String]): ReplBackend = {
+    val manager = new Session_Manager(show_states, enable_cache, max_cache_size)
+    tag.foreach { t =>
+      val previous = registry_lock.synchronized {
+        registry_seq += 1
+        registry.put(t, (registry_seq, manager))
+      }
+      previous.foreach { case (_, m) => stop_manager_async(m) }
+    }
+    try {
+      new ReplBackend(show_states, enable_cache, max_cache_size, initial_thys.asScala.toList,
+        Some(manager), field, session_dirs.asScala.toList)
+    } catch {
+      case exn: Throwable =>
+        tag.foreach(t => registry_lock.synchronized {
+          if (registry.get(t).exists(_._2 eq manager)) registry.remove(t)
+        })
+        manager.shutdown()
+        throw exn
+    }
+  }
+
+  def get_repl_backend_tagged(tag: String, show_states: Boolean, enable_cache: Boolean, max_cache_size: Int, initial_thys: java.util.List[String], field: String, session_dirs: java.util.List[String]): ReplBackend =
+    make_backend(Some(tag), show_states, enable_cache, max_cache_size, initial_thys, field, session_dirs)
+
+  private def stop_manager_async(manager: Session_Manager): Unit =
+    Isabelle_Thread.fork(name = "reap_backend") {
+      try manager.shutdown()
+      catch {
+        case e: Throwable => Output.error_message(s"Error reaping backend: ${Exn.message(e)}")
+      }
+    }
+
+  /** Stop the backend tagged `tag` (also one still starting) in the background.
+   *  False when no such backend is registered. */
+  def close_backend(tag: String): Boolean =
+    registry_lock.synchronized(registry.remove(tag)) match {
+      case Some((_, manager)) => stop_manager_async(manager); true
+      case None => false
+    }
+
+  /** The registration counter now: every backend registered so far has a number <= it. */
+  def reap_fence(): Long = registry_lock.synchronized(registry_seq)
+
+  /** Stop, in the background, every tagged backend registered at or before `fence`
+   *  whose tag is not in `live`; forget backends that are already shut down.
+   *  Returns the tags it stops. The caller takes `fence` BEFORE it reads its live
+   *  set, so a backend registered after that read is never reaped by this call. */
+  def reap_backends(live: java.util.List[String], fence: Long): java.util.List[String] = {
+    val keep = live.asScala.toSet
+    val reaped = registry_lock.synchronized {
+      registry.filterInPlace { case (_, (_, m)) => !m.is_closed }
+      val victims = registry.toList.collect {
+        case (t, (seq, m)) if seq <= fence && !keep.contains(t) => (t, m)
+      }
+      victims.foreach { case (t, _) => registry.remove(t) }
+      victims
+    }
+    reaped.foreach { case (_, m) => stop_manager_async(m) }
+    reaped.map(_._1).asJava
+  }
+
+  /** Tags of the registered backends that are not shut down (diagnostics, tests). */
+  def registered_backends(): java.util.List[String] =
+    registry_lock.synchronized(registry.collect { case (t, (_, m)) if !m.is_closed => t }.toList).asJava
 
   private var shared_session_manager: Option[Session_Manager] = None
 

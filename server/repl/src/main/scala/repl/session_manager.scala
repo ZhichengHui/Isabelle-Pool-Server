@@ -217,11 +217,29 @@ class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_c
         ("threads", session_threads_opt) ::
         session_delay_options_to_minimise.map(option_name => (option_name, min_delay))
     val session_options = session_option_pairs.map { case (name, value) => s"${name}=${value}" }
+    if (closed) error("Session manager is shut down: no new session")
     val session_id = Server_Utils.start_session(server_info, server, session_options, field, dirs)
-    running_sessions.change(_ += session_id)
+    // A shutdown that ran while the prover started has not seen this session: stop
+    // it here, or its prover (bash_process -> bash -> poly) outlives every handle.
+    val accepted = lifecycle_lock.synchronized {
+      if (!closed) running_sessions.change(_ += session_id)
+      !closed
+    }
+    if (!accepted) {
+      stop_session_quietly(session_id)
+      error(s"Session manager was shut down while session $session_id started; session stopped")
+    }
     val session = server.the_session(session_id)
-    if (initial_thys.nonEmpty) {
-      session.use_theories(initial_thys)
+    // A failed initial load (theory error, interrupt, shutdown) must not leave the
+    // started prover behind: the caller never receives a handle to it.
+    try {
+      if (initial_thys.nonEmpty) {
+        session.use_theories(initial_thys)
+      }
+    } catch {
+      case exn: Throwable =>
+        remove_session_sync(session_id)
+        throw exn
     }
     cache_stats.change(stats => { stats.update("creates", stats("creates") + 1); stats })
     increment_session_ref(session_id)
@@ -238,10 +256,19 @@ class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_c
     }
   }
 
-  private def remove_session_sync(session_id: UUID.T): Unit = {
-    Server_Utils.stop_session(server_info, server, session_id)
-    running_sessions.change(_ -= session_id)
-  }
+  private def remove_session_sync(session_id: UUID.T): Unit =
+    try stop_session_quietly(session_id)
+    finally running_sessions.change(_ -= session_id)
+
+  /** Stop one session: Session.stop terminates its prover through Isabelle's
+   *  Bash.Process.terminate, which signals the whole process group (INT, TERM,
+   *  KILL). Errors are logged, never thrown. */
+  private def stop_session_quietly(session_id: UUID.T): Unit =
+    try Server_Utils.stop_session(server_info, server, session_id)
+    catch {
+      case e: Throwable =>
+        Output.error_message(s"Error stopping session ${session_id}: ${Exn.message(e)}")
+    }
 
   def remove_session_async(session_id: UUID.T): Unit = {
     val removal_future = Future.fork[Unit](remove_session_sync(session_id))
@@ -252,7 +279,23 @@ class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_c
   def remove_session_async(session_data: Session_Data): Unit =
     remove_session_async(session_data.id)
 
+  /** Set once by [[shutdown]]: a closed manager starts no session and stops any
+   *  session whose start was in flight when it closed. */
+  private val lifecycle_lock = new Object
+  @volatile private var closed = false
+  def is_closed: Boolean = closed
+
+  /** Stop every session of this manager and its Isabelle server. Idempotent and
+   *  safe to call from any thread, also while another thread is inside a call on
+   *  this manager (a session start, a reset, a long use_theories): the Python
+   *  side calls it outside the session's worker thread when that thread is
+   *  blocked, and the gateway's reaper calls it for abandoned backends. */
   def shutdown(): Unit = {
+    val first = lifecycle_lock.synchronized { val was = closed; closed = true; !was }
+    if (first) shutdown_now()
+  }
+
+  private def shutdown_now(): Unit = {
     def apply_foreach[A](mutable_set: Synchronized[mutable.Set[A]])(f: A => Unit): Unit =
       mutable_set.guarded_access(set => Some((set.toList, set))).foreach(f)
 
@@ -273,7 +316,12 @@ class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_c
     
     lru_order.change(lru => { lru.clear(); lru })
 
-    Server_Utils.stop_server(server_info)
+    // Server shutdown also stops every session still registered with the server.
+    try Server_Utils.stop_server(server_info)
+    catch {
+      case e: Throwable =>
+        Output.error_message(s"Error stopping server ${server_info.name}: ${Exn.message(e)}")
+    }
   }
 }
 

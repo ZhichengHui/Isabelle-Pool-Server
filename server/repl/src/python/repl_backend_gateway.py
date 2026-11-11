@@ -15,6 +15,7 @@ from py4j.java_gateway import GatewayParameters, JavaGateway
 
 from server.app.core.config import Logging, Repl
 from server.app.core.logging import get_logger
+from server.repl.src.python import process_tree
 
 logger = get_logger(__name__)
 
@@ -333,6 +334,41 @@ class ReplBackendGatewayProcess:
             initial_thys, field,
         )
     
+    # Tagged backends (repl_backend_gateway.scala, "Tagged backends and the
+    # reaper"): the server tags each backend with its session id, so a backend it
+    # gave up on, or no longer holds, can be stopped without a handle to it.
+    def get_repl_backend_tagged(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+        self,
+        tag: str,
+        show_states: bool,
+        enable_cache: bool,
+        max_cache_size: int,
+        initial_thys: "py4j.java_collections.JavaList[str]",
+        field: str,
+        session_dirs: "py4j.java_collections.JavaList[str]",
+    ) -> ReplBackend:
+        return self._poll_gateway(
+            "get_repl_backend_tagged",
+            tag, show_states, enable_cache, max_cache_size,
+            initial_thys, field, session_dirs,
+        )
+
+    def close_backend(self, tag: str) -> bool:
+        """Stop (in the JVM, in the background) the backend tagged ``tag``."""
+        return bool(self.gateway.jvm.repl.ReplBackendGateway.close_backend(tag))
+
+    def reap_fence(self) -> int:
+        return int(self.gateway.jvm.repl.ReplBackendGateway.reap_fence())
+
+    def reap_backends(self, live: "list[str]", fence: int) -> "list[str]":
+        """Stop every tagged backend registered at or before ``fence`` whose tag
+        is not in ``live``; returns the tags stopped."""
+        java_live = self.gateway.jvm.java.util.ArrayList()
+        for tag in live:
+            java_live.add(tag)
+        reaped = self.gateway.jvm.repl.ReplBackendGateway.reap_backends(java_live, fence)
+        return [str(t) for t in reaped]
+
     def _signal_group(self, sig: int) -> None:
         """Send ``sig`` to the gateway's whole process group.
 
@@ -366,6 +402,15 @@ class ReplBackendGatewayProcess:
         ``TERMINATE_WAIT`` for a clean exit, then SIGKILLs the group as a
         backstop so no orphaned JVM/Isabelle processes survive.
         """
+        # The prover trees (bash_process -> bash -> poly) are in their own
+        # process groups (bash_process calls setsid), so the group signals
+        # below do not reach them; when the JVM dies first they are orphaned.
+        # Record every descendant now and end those trees at the end.
+        try:
+            tree = process_tree.descendants(self.process.pid)
+        except Exception:  # pylint: disable=broad-exception-caught
+            tree = []
+
         # Step 1: Shutdown Py4J gateway (tells Scala we're done).
         try:
             self.gateway.shutdown()
@@ -402,4 +447,10 @@ class ReplBackendGatewayProcess:
             self.process.wait(timeout=2)
         except Exception:
             pass
+        # Step 6: end the prover trees that outlived the JVM.
+        survivors = process_tree.kill_trees(tree, grace=self.TERMINATE_WAIT)
+        if survivors:
+            logger.warning(
+                "ended %d process(es) left behind by the gateway JVM", len(survivors)
+            )
         print("Gateway process group terminated")
