@@ -48,7 +48,8 @@ def _check_nothing_retained(report, scenario):
 @live
 @pytest.mark.parametrize("scenario", ["normal", "start_fail", "load_fail", "abandon", "stop_fail"])
 def test_ended_backends_leave_nothing(scenario):
-    from tests import gateway_leak_probe as probe
+    sys.path.insert(0, os.path.dirname(__file__))
+    import gateway_leak_probe as probe
 
     report = probe.run(cycles=3, scenarios=[scenario], lemmas=100, settle=3.0)
     _check_nothing_retained(report, scenario)
