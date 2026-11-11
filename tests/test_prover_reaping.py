@@ -57,8 +57,9 @@ class FakeProver:
     """``bash_process`` (``outer``, in the caller's process group) -> ``bash``
     (``leader``, own session/group via setsid) -> ``poly`` -> a child."""
 
-    def __init__(self, preexec_fn=None, outer_tail: str = "wait"):
-        env = dict(os.environ, FAKE_POLY_PY=sys.executable, FAKE_POLY_CODE=_STUBBORN_POLY)
+    def __init__(self, preexec_fn=None, outer_tail: str = "wait", extra_env=None):
+        env = dict(os.environ, FAKE_POLY_PY=sys.executable, FAKE_POLY_CODE=_STUBBORN_POLY,
+                   **(extra_env or {}))
         self.outer = subprocess.Popen(
             ["bash", "-c",
              f"setsid bash -c '\"$FAKE_POLY_PY\" -c \"$FAKE_POLY_CODE\" & wait' & {outer_tail}"],
@@ -88,7 +89,7 @@ class FakeProver:
         return self.running()
 
     def cleanup(self):
-        for p in self.tree:
+        for p in [*self.tree, *process_tree.descendants(self.outer.pid)]:
             try:
                 os.kill(p, signal.SIGKILL)
             except OSError:
@@ -409,16 +410,163 @@ def test_cleanup_sweep_runs_the_reaper():
 # ------------------------------------------------- gateway JVM termination
 
 
+def _gateway(process, marker):
+    proc = gw_mod.ReplBackendGatewayProcess.__new__(gw_mod.ReplBackendGatewayProcess)
+    proc.process = process
+    proc.marker = marker
+    proc.gateway = type("G", (), {"shutdown": lambda self: None})()
+    return proc
+
+
 def test_gateway_terminate_ends_prover_trees_outside_its_group(monkeypatch):
     """The prover groups are not in the gateway's process group (setsid), so
     the group SIGTERM/SIGKILL left them running when the JVM died."""
-    fp = FakeProver(preexec_fn=os.setsid, outer_tail="sleep 600")
+    marker = uuid.uuid4().hex
+    fp = FakeProver(preexec_fn=os.setsid, outer_tail="sleep 600",
+                    extra_env={gw_mod.GATEWAY_MARK_KEY: marker})
     try:
-        proc = gw_mod.ReplBackendGatewayProcess.__new__(gw_mod.ReplBackendGatewayProcess)
-        proc.process = fp.outer
-        proc.gateway = type("G", (), {"shutdown": lambda self: None})()
         monkeypatch.setattr(gw_mod.ReplBackendGatewayProcess, "TERMINATE_WAIT", 0.5)
-        proc.terminate()
+        _gateway(fp.outer, marker).terminate()
         assert fp.wait_gone() == []
     finally:
         fp.cleanup()
+
+
+def test_gateway_terminate_after_the_jvm_died_ends_adopted_provers(monkeypatch):
+    """Review 3: the JVM was OOM-killed before recovery; its provers were adopted
+    by init and are no descendants of anything the server knows. They carry the
+    gateway's marker, so terminate() still ends them."""
+    marker = uuid.uuid4().hex
+    fp = FakeProver(preexec_fn=os.setsid, outer_tail="sleep 600",
+                    extra_env={gw_mod.GATEWAY_MARK_KEY: marker})
+    try:
+        os.killpg(fp.outer.pid, signal.SIGKILL)  # the whole gateway group dies
+        fp.outer.wait(timeout=5)
+        assert process_tree.descendants(fp.outer.pid) == []
+        assert fp.running() == fp.tree  # orphaned, still running
+        monkeypatch.setattr(gw_mod.ReplBackendGatewayProcess, "TERMINATE_WAIT", 0.5)
+        _gateway(fp.outer, marker).terminate()
+        assert fp.wait_gone() == []
+    finally:
+        fp.cleanup()
+
+
+def test_gateway_terminate_spares_unmarked_processes(monkeypatch):
+    """Review 1: processes are chosen by the marker at kill time, not by pids
+    recorded earlier, so a process that is not the gateway's (e.g. one that got
+    a reused pid) is not touched — nor one of another gateway."""
+    marker = uuid.uuid4().hex
+    other = FakeProver(preexec_fn=os.setsid, outer_tail="sleep 600",
+                       extra_env={gw_mod.GATEWAY_MARK_KEY: "another-gateway"})
+    unmarked = FakeProver(preexec_fn=os.setsid, outer_tail="sleep 600")
+    dead = subprocess.Popen(["true"], preexec_fn=os.setsid)
+    dead.wait()
+    try:
+        monkeypatch.setattr(gw_mod.ReplBackendGatewayProcess, "TERMINATE_WAIT", 0.5)
+        _gateway(dead, marker).terminate()
+        assert other.running() == other.tree
+        assert unmarked.running() == unmarked.tree
+        assert other.outer.poll() is None and unmarked.outer.poll() is None
+    finally:
+        other.cleanup()
+        unmarked.cleanup()
+
+
+# ------------------------------------------------- review follow-ups (2, 5, 6)
+
+
+class _HangingReapGateway(_ReapGateway):
+    def reap_fence(self):
+        time.sleep(5)  # a wedged JVM: the Py4J call does not answer
+        return 0
+
+
+def test_reaper_call_is_time_bounded(monkeypatch):
+    """Review 2: a wedged JVM must not hold the sweep for the Py4J read timeout."""
+    sm = SessionManager()
+    sm.gateway = _HangingReapGateway(reaped=[])
+    monkeypatch.setattr(SessionManager, "REAP_CALL_TIMEOUT_S", 0.3)
+    start = time.monotonic()
+    assert sm.reap_orphan_backends() == []
+    assert time.monotonic() - start < 2
+
+
+def test_sweep_checks_liveness_before_reaping():
+    """Review 2: on a dead gateway the sweep recovers it and does not call the
+    reaper (whose calls would only wait on the dead JVM)."""
+    gw = _ReapGateway(reaped=[])
+    gw.is_alive = lambda: False  # type: ignore[method-assign]
+    sm = SessionManager()
+    sm.memory_management_enabled = False
+    sm.gateway = gw
+    recovered = []
+    sm._ensure_gateway = lambda: recovered.append(True)  # type: ignore[method-assign]
+    asyncio.run(sm.cleanup_once())
+    assert recovered == [True]
+    assert gw.calls == []
+
+
+def test_session_close_ignores_a_zombie_prover(monkeypatch, caplog):
+    """Review 5: an ended prover not yet collected by its parent (a zombie) is
+    still listed in /proc; it is not "still running", so no kill and no ERROR."""
+    child = subprocess.Popen(["true"])
+    assert _wait(lambda: not process_tree.running(child.pid))  # exited, not waited: zombie
+    called = []
+    monkeypatch.setattr(process_tree, "kill_trees", lambda *a, **k: called.append(a) or [])
+    try:
+        session = _memory_session(_NoopExitRaw())
+        session.ml_pid = child.pid
+        session.ml_starttime = read_starttime(child.pid)
+        assert session.ml_starttime is not None  # the zombie is still listed
+        session.close()
+        assert called == []
+        assert "still ran after the backend closed" not in caplog.text
+    finally:
+        child.wait()
+
+
+class _SlowExitRaw(_Raw):
+    def exit(self):
+        time.sleep(1.0)
+        super().exit()
+
+
+class _SlowExitGateway(_SlowFactoryGateway):
+    def get_repl_backend_tagged(self, tag, *args):
+        self.tags.append(tag)
+        raw = _SlowExitRaw()
+        self.raws.append(raw)
+        return raw
+
+
+def test_pool_full_close_does_not_block_the_event_loop():
+    """Review 6: closing the refused session (pool full) blocks for the backend
+    exit (+ the prover kill); it must run off the event loop."""
+    from server.app.errors import PoolExhausted
+
+    gw = _SlowExitGateway(delay=0.0)
+    sm = _manager(gw)
+    sm.pool_size = 0  # every new session is refused after creation
+
+    async def run():
+        gaps = []
+        stop = asyncio.Event()
+
+        async def ticker():
+            last = time.monotonic()
+            while not stop.is_set():
+                await asyncio.sleep(0.02)
+                now = time.monotonic()
+                gaps.append(now - last)
+                last = now
+
+        t = asyncio.create_task(ticker())
+        with pytest.raises(PoolExhausted):
+            await sm._create_session(["Main"], "HOL")
+        stop.set()
+        await t
+        return gaps
+
+    gaps = asyncio.run(run())
+    assert gw.raws[0].exited.is_set()
+    assert max(gaps) < 0.5, max(gaps)

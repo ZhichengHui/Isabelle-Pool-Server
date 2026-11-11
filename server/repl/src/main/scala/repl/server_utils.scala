@@ -131,9 +131,14 @@ object Server_Utils {
       server: Server,
       session_id: UUID.T
   ): Unit = {
-    // grab session, run command, then unregister
-    val session = server.remove_session(session_id)
+    // Stop first, unregister after: a session whose stop fails stays registered,
+    // so a retry (or the server's own shutdown) can still reach it.
+    val session =
+      try server.the_session(session_id)
+      catch { case ERROR(_) => Output.writeln(s"Session ${session_id} already stopped."); return }
     val (session_stop_json, _) = Server_Commands.Session_Stop.command(session)
+    try server.remove_session(session_id)
+    catch { case ERROR(_) => }  // a concurrent stop of the same session removed it
 
     val return_code = session_stop_json.getOrElse(
       "return_code",

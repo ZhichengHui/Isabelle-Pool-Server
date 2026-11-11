@@ -69,6 +69,31 @@ def descendants(pid: int, children: Optional[Dict[int, List[int]]] = None) -> Li
     return out
 
 
+def marked(key: str, value: str) -> List[int]:
+    """Pids of the running processes whose environment has ``key=value`` (from
+    /proc/<pid>/environ, the environment at exec). A marker set on one process
+    is inherited by every descendant, whoever adopts it later, and no unrelated
+    process carries it, so a reused pid is never mistaken for one of them."""
+    needle = f"{key}={value}".encode()
+    me = os.getpid()
+    out: List[int] = []
+    try:
+        entries = os.listdir(PROC_ROOT)
+    except OSError:
+        return out
+    for name in entries:
+        if not name.isdigit() or int(name) == me:
+            continue
+        try:
+            with open(f"{PROC_ROOT}/{name}/environ", "rb") as fh:
+                env = fh.read()
+        except OSError:
+            continue
+        if needle in env.split(b"\0") and running(int(name)):
+            out.append(int(name))
+    return out
+
+
 def pgid_of(pid: int) -> Optional[int]:
     try:
         return os.getpgid(pid)

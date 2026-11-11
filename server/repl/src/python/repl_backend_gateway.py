@@ -6,6 +6,7 @@ import signal
 import subprocess
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Protocol
 
@@ -25,6 +26,10 @@ logger = get_logger(__name__)
 REPL_ROOT = Path(__file__).resolve().parent.parent.parent
 repl_gateway_path = REPL_ROOT / "src" / "main" / "scala" / "repl" / "repl_backend_gateway.scala"
 isabelle_executable = Path(os.environ.get("ISABELLE_HOME", "/opt/isabelle")) / "bin" / "isabelle"
+
+
+#: Environment variable that marks every process of one gateway (see terminate).
+GATEWAY_MARK_KEY = "ISABELLE_POOL_GATEWAY_MARK"
 
 
 def _gateway_log_dir() -> Path:
@@ -130,8 +135,13 @@ class ReplBackendGatewayProcess:
         self._jvm_log = open(  # noqa: SIM115 — lives as long as the process
             log_dir / "gateway-jvm.log", "a", buffering=1, encoding="utf-8"
         )
+        # Every process this gateway starts inherits the marker (provers too,
+        # also after the JVM died and init adopted them): terminate() finds and
+        # ends them by it, without the JVM and without trusting recorded pids.
+        self.marker = uuid.uuid4().hex
         self.process = subprocess.Popen(
             [isabelle_executable, "scala", str(repl_gateway_path)],
+            env={**os.environ, GATEWAY_MARK_KEY: self.marker},
             # Isabelle uses many child processes, so we start a new process group
             preexec_fn=os.setsid,
             # Port number will be passed via stdout
@@ -402,15 +412,6 @@ class ReplBackendGatewayProcess:
         ``TERMINATE_WAIT`` for a clean exit, then SIGKILLs the group as a
         backstop so no orphaned JVM/Isabelle processes survive.
         """
-        # The prover trees (bash_process -> bash -> poly) are in their own
-        # process groups (bash_process calls setsid), so the group signals
-        # below do not reach them; when the JVM dies first they are orphaned.
-        # Record every descendant now and end those trees at the end.
-        try:
-            tree = process_tree.descendants(self.process.pid)
-        except Exception:  # pylint: disable=broad-exception-caught
-            tree = []
-
         # Step 1: Shutdown Py4J gateway (tells Scala we're done).
         try:
             self.gateway.shutdown()
@@ -447,8 +448,14 @@ class ReplBackendGatewayProcess:
             self.process.wait(timeout=2)
         except Exception:
             pass
-        # Step 6: end the prover trees that outlived the JVM.
-        survivors = process_tree.kill_trees(tree, grace=self.TERMINATE_WAIT)
+        # Step 6: end the prover trees that outlived the JVM. They are in their
+        # own process groups (bash_process calls setsid), so the group signals
+        # above do not reach them, and once the JVM is gone (killed here, or
+        # OOM-killed before recovery) init has adopted them: they are found by
+        # the marker every process of this gateway inherited.
+        marker = getattr(self, "marker", None)
+        left = process_tree.marked(GATEWAY_MARK_KEY, marker) if marker else []
+        survivors = process_tree.kill_trees(left, grace=self.TERMINATE_WAIT)
         if survivors:
             logger.warning(
                 "ended %d process(es) left behind by the gateway JVM", len(survivors)

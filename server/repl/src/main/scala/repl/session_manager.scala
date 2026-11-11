@@ -256,22 +256,28 @@ class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_c
     }
   }
 
-  private def remove_session_sync(session_id: UUID.T): Unit =
-    try stop_session_quietly(session_id)
-    finally running_sessions.change(_ -= session_id)
+  /** Stop one session and forget it. A session whose stop FAILED stays in
+   *  `running_sessions` (and registered with the Isabelle server), so that
+   *  [[shutdown]] retries it and reports it if it still fails. */
+  private def remove_session_sync(session_id: UUID.T): Boolean = {
+    val ok = stop_session_quietly(session_id)
+    if (ok) running_sessions.change(_ -= session_id)
+    ok
+  }
 
   /** Stop one session: Session.stop terminates its prover through Isabelle's
    *  Bash.Process.terminate, which signals the whole process group (INT, TERM,
-   *  KILL). Errors are logged, never thrown. */
-  private def stop_session_quietly(session_id: UUID.T): Unit =
-    try Server_Utils.stop_session(server_info, server, session_id)
+   *  KILL). Errors are logged and answered with false, never thrown. */
+  private def stop_session_quietly(session_id: UUID.T): Boolean =
+    try { Server_Utils.stop_session(server_info, server, session_id); true }
     catch {
       case e: Throwable =>
         Output.error_message(s"Error stopping session ${session_id}: ${Exn.message(e)}")
+        false
     }
 
   def remove_session_async(session_id: UUID.T): Unit = {
-    val removal_future = Future.fork[Unit](remove_session_sync(session_id))
+    val removal_future = Future.fork[Unit] { remove_session_sync(session_id) }
     pending_removals.change(_ += removal_future)
     removal_future.map(_ => pending_removals.change(_ -= removal_future))
   }
@@ -292,8 +298,21 @@ class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_c
    *  blocked, and the gateway's reaper calls it for abandoned backends. */
   def shutdown(): Unit = {
     val first = lifecycle_lock.synchronized { val was = closed; closed = true; !was }
-    if (first) shutdown_now()
+    // Every call returns only when the stop is over: a later call (the reaper,
+    // a second close) waits for the first one, so a return always means that
+    // the provers are stopped (or the failure below is thrown).
+    if (first) {
+      try shutdown_now()
+      finally shutdown_done.countDown()
+    }
+    else if (!shutdown_done.await(Session_Manager.SHUTDOWN_WAIT_S, java.util.concurrent.TimeUnit.SECONDS)) {
+      error(s"Session manager still stopping after ${Session_Manager.SHUTDOWN_WAIT_S} s")
+    }
+    shutdown_failure.foreach(msg => error(msg))
   }
+
+  private val shutdown_done = new java.util.concurrent.CountDownLatch(1)
+  @volatile private var shutdown_failure: Option[String] = None
 
   private def shutdown_now(): Unit = {
     def apply_foreach[A](mutable_set: Synchronized[mutable.Set[A]])(f: A => Unit): Unit =
@@ -316,12 +335,28 @@ class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_c
     
     lru_order.change(lru => { lru.clear(); lru })
 
+    // Retry the sessions whose stop failed (they are still registered).
+    apply_foreach(running_sessions)(id => remove_session_sync(id))
+    val failed = running_sessions.value.toList
+
     // Server shutdown also stops every session still registered with the server.
     try Server_Utils.stop_server(server_info)
     catch {
       case e: Throwable =>
         Output.error_message(s"Error stopping server ${server_info.name}: ${Exn.message(e)}")
     }
+    if (failed.nonEmpty) {
+      // Reported to the caller (ThreadedBackend.close logs it; the server then
+      // ends a known prover pid itself).
+      shutdown_failure = Some(s"Failed to stop session(s) ${failed.mkString(", ")}; " +
+        "their provers may still run")
+    }
   }
+}
+
+object Session_Manager {
+  /** How long a second [[Session_Manager.shutdown]] waits for the first one (s). */
+  val SHUTDOWN_WAIT_S: Long =
+    sys.env.get("ISABELLE_REPL_SHUTDOWN_WAIT").flatMap(_.toLongOption).getOrElse(120L)
 }
 

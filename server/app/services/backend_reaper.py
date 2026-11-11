@@ -23,6 +23,7 @@ Mixed into ``SessionManager``; uses ``self._lock``, ``self._lru``, ``self.gatewa
 """
 from __future__ import annotations
 
+import concurrent.futures
 import threading
 from typing import Any, List, Optional, Set
 
@@ -32,6 +33,9 @@ logger = get_logger(__name__)
 
 
 class BackendReaperMixin:
+    #: Bound on the reaper's Py4J round trip (seconds).
+    REAP_CALL_TIMEOUT_S: float = 10.0
+
     _lock: threading.Lock
     _lru: Any
     gateway: Any
@@ -98,14 +102,23 @@ class BackendReaperMixin:
         gw = self.gateway
         if gw is None:
             return []
-        try:
+        def reap() -> List[str]:
             fence = gw.reap_fence()  # BEFORE the live set (see module docstring)
             with self._lock:
                 live = [str(sid) for sid in self._lru] + list(self._creating_tags)
-            reaped = gw.reap_backends(live, fence)
+            return list(gw.reap_backends(live, fence))
+
+        # Bounded: a wedged JVM answers a Py4J call only at PY4J_READ_TIMEOUT
+        # (15 min), which must not hold up the sweep (gateway recovery, idle and
+        # memory reclaim). The call thread is left to finish on its own.
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
+            reaped = pool.submit(reap).result(timeout=self.REAP_CALL_TIMEOUT_S)
         except Exception as e:  # pylint: disable=broad-exception-caught
             logger.warning("orphan backend reaper failed: %s: %s", type(e).__name__, e)
             return []
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
         for tag in reaped:
             logger.error(
                 "reaped orphan backend %s: its session is no longer registered, "

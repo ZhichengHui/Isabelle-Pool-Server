@@ -296,7 +296,7 @@ class SessionManager(SessionManagerHelpersMixin, MemoryPolicyMixin, FillJobMixin
                     task_group=task_group,
                 )
             except Exception as e:
-                backend.close()
+                await asyncio.to_thread(backend.close)
                 self.end_backend_create(tag)
                 logger.exception("failed to create session object for session_id=%s", session_id)
                 raise RuntimeError(f"{where}: failed to create session object for session {session_id}: {e}") from e
@@ -334,7 +334,7 @@ class SessionManager(SessionManagerHelpersMixin, MemoryPolicyMixin, FillJobMixin
                         )
                 if pool_full:
                     metrics.pool_exhausted.labels("all_busy").inc()
-                    session.close()
+                    await asyncio.to_thread(session.close)
                     raise PoolExhausted(
                         f"Session pool is full ({self.pool_size} sessions) "
                         f"and all sessions are actively processing requests or leased. "
@@ -345,14 +345,14 @@ class SessionManager(SessionManagerHelpersMixin, MemoryPolicyMixin, FillJobMixin
                     try:
                         with logging_context(session_id=oldest_id, field=oldest.field):
                             logger.info("evicting idle LRU session because pool is full")
-                            oldest.close()
+                            await asyncio.to_thread(oldest.close)
                             metrics.sessions_evicted.labels("lru").inc()
                     except Exception:
                         logger.exception("failed to close evicted session session_id=%s", oldest_id)
             except PoolExhausted:
                 raise  # propagate without wrapping
             except Exception as e:
-                session.close()
+                await asyncio.to_thread(session.close)
                 logger.exception("failed to register session session_id=%s", session_id)
                 raise RuntimeError(f"{where}: failed to add session {session_id} to session manager: {e}") from e
 

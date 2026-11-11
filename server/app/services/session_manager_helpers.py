@@ -355,12 +355,6 @@ class SessionManagerHelpersMixin:
             await asyncio.to_thread(
                 self._relieve_memory_pressure, self._where("cleanup_once"))
 
-        # Backstop: stop every JVM backend (and its prover) that no registered
-        # session or creation in flight owns (backend_reaper.py).
-        reap = getattr(self, "reap_orphan_backends", None)
-        if reap is not None:
-            await asyncio.to_thread(reap)
-
         # Proactively recover a dead gateway (e.g. OOM-killed) so the server
         # doesn't sit bricked until the next create request comes in.
         if self.gateway is not None and not await asyncio.to_thread(self.gateway_alive):
@@ -369,6 +363,14 @@ class SessionManagerHelpersMixin:
                 await asyncio.to_thread(self._ensure_gateway)
             except Exception:
                 logger.exception("background gateway recovery failed")
+        elif self.gateway is not None:
+            # Backstop, only on a gateway that just answered the liveness probe
+            # (the reaper's own calls are time-bounded too): stop every JVM backend
+            # (and its prover) that no registered session or creation in flight
+            # owns (backend_reaper.py).
+            reap = getattr(self, "reap_orphan_backends", None)
+            if reap is not None:
+                await asyncio.to_thread(reap)
         return closed
 
     def start_cleanup_task(self) -> None:
