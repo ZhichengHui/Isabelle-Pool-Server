@@ -294,7 +294,18 @@ class Probe:
         self.gw.terminate()
 
 
-def run(cycles: int, scenarios: List[str], lemmas: int, settle: float) -> Dict[str, Any]:
+RETAINED = ("sessions", "servers", "managers", "backends", "provers", "commands")
+
+
+def _retains(m: Dict[str, Any], base: Dict[str, Any]) -> bool:
+    return m["poly"] > 0 or any(m[k] > base[k] for k in RETAINED)
+
+
+def run(cycles: int, scenarios: List[str], lemmas: int, settle: float,
+        drain: float = 0.0) -> Dict[str, Any]:
+    """`drain` > 0: after the last cycle, if anything is retained, measure again
+    every 5 s for up to `drain` s (report["drained"]): a session held by a pending
+    timer is released when it fires; a leaked one never is."""
     with tempfile.TemporaryDirectory(prefix="leak_probe_") as d:
         _write_probe_theory(Path(d), lemmas)
         probe = Probe(Path(d))
@@ -321,6 +332,13 @@ def run(cycles: int, scenarios: List[str], lemmas: int, settle: float) -> Dict[s
                 if probe._has("fatal_error") else None
             )
             report["alive"] = bool(probe.jvm.repl.ReplBackendGateway.alive())
+            last = report["steps"][-1] if report["steps"] else report["baseline"]
+            waited = 0.0
+            while drain > 0 and waited < drain and _retains(last, report["baseline"]):
+                time.sleep(5.0)
+                waited += 5.0 + 2.0  # measure() sleeps 2 s
+                last = probe.measure()
+            report["drained"] = dict(last, waited_s=waited)
         finally:
             probe.close()
         return report

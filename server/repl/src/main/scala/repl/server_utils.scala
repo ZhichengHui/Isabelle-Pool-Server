@@ -150,7 +150,10 @@ object Server_Utils {
       catch {
         case exn: Throwable if session.phase.isInstanceOf[isabelle.Session.Terminated] =>
           // stop() completed; Session_Stop only reports a nonzero prover return
-          // code (e.g. a killed prover) as Server.Error. Nothing left to tear down.
+          // code (e.g. a killed prover) as Server.Error. The prover exited before
+          // the Stop, so the timer delays are still armed and hold the session.
+          for (problem <- Session_Teardown.cancel_delays(session))
+            Output.warning(s"Session ${session_id}: $problem")
           try server.remove_session(session_id)
           catch { case ERROR(_) => }
           Output.writeln(s"Stopped session ${session_id}: ${Exn.message(exn)}")

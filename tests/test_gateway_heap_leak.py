@@ -35,7 +35,9 @@ RETAINED = ("sessions", "servers", "managers", "backends", "provers")
 def _check_nothing_retained(report, scenario):
     steps = [s for s in report["steps"] if s["scenario"] == scenario]
     assert steps, scenario
-    last = steps[-1]
+    # after the pending Event_Timer delays had their chance to fire (bounded
+    # retention); a leaked session stays
+    last = report["drained"]
     base = report["baseline"]
     for key in RETAINED:
         assert last[key] <= base[key], (scenario, key, base[key], last[key], steps)
@@ -53,7 +55,7 @@ def test_ended_backends_leave_nothing(scenario):
     sys.path.insert(0, os.path.dirname(__file__))
     import gateway_leak_probe as probe
 
-    report = probe.run(cycles=3, scenarios=[scenario], lemmas=100, settle=3.0)
+    report = probe.run(cycles=3, scenarios=[scenario], lemmas=100, settle=3.0, drain=45.0)
     _check_nothing_retained(report, scenario)
     steps = [s for s in report["steps"] if s["scenario"] == scenario]
     teardowns = [s["forced_teardowns"] for s in steps]

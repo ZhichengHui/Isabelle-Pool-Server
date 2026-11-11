@@ -84,14 +84,13 @@ object Session_Teardown {
     else error.value.foreach(msg => problems += s"$what: $msg")
   }
 
-  /** Finish the shutdown of `session` that `Session.stop()` left undone. Returns
-   *  the steps that failed (empty: the session holds no thread and no prover). */
-  def force(session: isabelle.Session): List[String] = {
-    val problems = new mutable.ListBuffer[String]
-
-    // 0. What the manager does on Stop before the prover goes: cancel the pending
-    //    consolidation and history-prune delays. A scheduled delay sits in the
-    //    JVM-global Event_Timer queue and holds the session until it fires (~30 s).
+  /** Cancel the session's pending consolidation and history-prune delays, as the
+   *  manager does on Stop. A scheduled delay sits in the JVM-global Event_Timer
+   *  queue and holds the session until it fires (~30 s). Also needed after a stop
+   *  that completed because the prover had already exited: then stop() sends no
+   *  Stop, and the delays stay armed. */
+  def cancel_delays(session: isabelle.Session,
+      problems: mutable.ListBuffer[String] = new mutable.ListBuffer[String]): List[String] = {
     bounded("consolidation", problems) {
       call(member_object(session, "isabelle$Session$$consolidation"), "exit")
     }
@@ -101,6 +100,16 @@ object Session_Teardown {
         case _ =>  // never initialized
       }
     }
+    problems.toList
+  }
+
+  /** Finish the shutdown of `session` that `Session.stop()` left undone. Returns
+   *  the steps that failed (empty: the session holds no thread and no prover). */
+  def force(session: isabelle.Session): List[String] = {
+    val problems = new mutable.ListBuffer[String]
+
+    // 0. What the manager does on Stop before the prover goes.
+    cancel_delays(session, problems)
 
     // 1. The prover: its reader threads deliver to the session, and the process
     //    must not outlive the session (Prover.terminate: close input, then
