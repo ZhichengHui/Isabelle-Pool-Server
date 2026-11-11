@@ -89,6 +89,19 @@ object Session_Teardown {
   def force(session: isabelle.Session): List[String] = {
     val problems = new mutable.ListBuffer[String]
 
+    // 0. What the manager does on Stop before the prover goes: cancel the pending
+    //    consolidation and history-prune delays. A scheduled delay sits in the
+    //    JVM-global Event_Timer queue and holds the session until it fires (~30 s).
+    bounded("consolidation", problems) {
+      call(member_object(session, "isabelle$Session$$consolidation"), "exit")
+    }
+    bounded("delay_prune", problems) {
+      field(session, "delay_prune$lzy1") match {
+        case delay: Delay => delay.revoke()
+        case _ =>  // never initialized
+      }
+    }
+
     // 1. The prover: its reader threads deliver to the session, and the process
     //    must not outlive the session (Prover.terminate: close input, then
     //    INT/TERM/KILL to the process group).
