@@ -41,13 +41,7 @@ class BackendReaperMixin:
     gateway: Any
     create_raw_backend: Any
 
-    @property
-    def _creating_tags(self) -> Set[str]:
-        tags: Optional[Set[str]] = getattr(self, "_creating_tags_set", None)
-        if tags is None:
-            tags = set()
-            self._creating_tags_set = tags
-        return tags
+    _creating_tags: Set[str]  # initialized by SessionManager.__init__
 
     def begin_backend_create(self, tag: str) -> None:
         with self._lock:

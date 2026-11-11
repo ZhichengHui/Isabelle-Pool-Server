@@ -104,7 +104,10 @@ object ReplBackendGateway {
         tag.foreach(t => registry_lock.synchronized {
           if (registry.get(t).exists(_._2 eq manager)) registry.remove(t)
         })
-        manager.shutdown()
+        // In the background: the caller gets the creation error at once (not a
+        // shutdown error, and not after waiting for a shutdown already running
+        // from close_backend or the reaper).
+        stop_manager_async(manager)
         throw exn
     }
   }

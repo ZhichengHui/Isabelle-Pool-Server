@@ -336,11 +336,9 @@ class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_c
           Output.error_message(s"Error during session removal: ${Exn.message(e)}")
       }
     }
-    session_cache.change { cache =>
-      cache.values.foreach(_.foreach(session_data => remove_session_async(session_data.id)))
-      cache.clear()
-      cache
-    }
+    // Every cached session is also in running_sessions, so it was stopped above
+    // (or is retried below): only forget the cache, start no second removal.
+    session_cache.change { cache => cache.clear(); cache }
     
     lru_order.change(lru => { lru.clear(); lru })
 

@@ -570,3 +570,30 @@ def test_pool_full_close_does_not_block_the_event_loop():
     gaps = asyncio.run(run())
     assert gw.raws[0].exited.is_set()
     assert max(gaps) < 0.5, max(gaps)
+
+
+def test_tree_root_never_picks_a_protected_group():
+    """Review: a prover in the gateway's own group (no setsid) must not make
+    tree_root pick the gateway; a protected root is never ended."""
+    import subprocess
+
+    leader = subprocess.Popen(["sh", "-c", "sleep 30 & wait"], start_new_session=True)
+    try:
+        deadline = time.time() + 5
+        kids: list = []
+        while time.time() < deadline and not kids:
+            kids = process_tree.descendants(leader.pid)
+            time.sleep(0.05)
+        assert kids
+        child = kids[0]
+        assert process_tree.tree_root(child) == leader.pid  # unprotected: the leader
+        process_tree.protect_group(leader.pid)
+        try:
+            assert process_tree.tree_root(child) == child
+            assert process_tree.kill_trees([leader.pid], grace=0.5) == []
+            assert process_tree.running(leader.pid)
+        finally:
+            process_tree.unprotect_group(leader.pid)
+    finally:
+        os.killpg(leader.pid, signal.SIGKILL)
+        leader.wait(timeout=5)

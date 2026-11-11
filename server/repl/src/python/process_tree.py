@@ -19,15 +19,34 @@ from typing import Dict, Iterable, List, Optional, Set
 PROC_ROOT = "/proc"
 
 
-def _stat_fields(pid: int) -> Optional[List[str]]:
+def stat_fields(pid: int, proc_root: Optional[str] = None) -> Optional[List[str]]:
     """Fields of /proc/<pid>/stat after the command name (state is [0], ppid [1],
-    pgid [2]); None when the process is gone."""
+    pgid [2], starttime [19]); None when the process is gone. The one parser of
+    this format (memory_monitor uses it too)."""
     try:
-        with open(f"{PROC_ROOT}/{pid}/stat", "r", encoding="utf-8") as fh:
+        with open(f"{proc_root or PROC_ROOT}/{pid}/stat", "r", encoding="utf-8") as fh:
             _, _, rest = fh.read().rpartition(")")
         return rest.split()
     except (OSError, ValueError):
         return None
+
+
+_stat_fields = stat_fields
+
+
+#: Process groups that are never ended as a tree or signalled as a group: the
+#: gateway's own group (registered by ReplBackendGatewayProcess). Its leader is an
+#: ancestor of every prover, so without this a prover that shares the gateway's
+#: group (no setsid in bash_process) would make ``tree_root`` pick the gateway.
+_protected_groups: Set[int] = set()
+
+
+def protect_group(pgid: int) -> None:
+    _protected_groups.add(pgid)
+
+
+def unprotect_group(pgid: int) -> None:
+    _protected_groups.discard(pgid)
 
 
 def running(pid: int) -> bool:
@@ -122,7 +141,8 @@ def tree_root(pid: int) -> int:
     ``bash_process`` started with ``setsid``: ending the tree from there ends
     the whole prover group."""
     pgid = pgid_of(pid)
-    if pgid is not None and pgid != pid and pgid in ancestors(pid):
+    if (pgid is not None and pgid != pid and pgid not in _protected_groups
+            and pgid in ancestors(pid)):
         return pgid
     return pid
 
@@ -159,12 +179,12 @@ def kill_trees(
     group holds processes outside the trees, e.g. the gateway JVM), unless the
     root leads that group itself.
     """
-    protected = {os.getpgrp(), 0, 1, *protect_pgids}
+    protected = {os.getpgrp(), 0, 1, *protect_pgids, *_protected_groups}
     me = os.getpid()
     children = children_map()
     targets: List[int] = []
     for root in roots:
-        if root in (None, 0, 1, me) or not running(root):
+        if root in (None, 0, 1, me) or not running(root) or root in _protected_groups:
             continue
         for a in ancestors(root):
             g = pgid_of(a)
