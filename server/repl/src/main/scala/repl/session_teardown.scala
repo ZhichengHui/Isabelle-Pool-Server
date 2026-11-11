@@ -30,8 +30,12 @@ object Session_Teardown {
 
   private val session_class = classOf[isabelle.Session]
 
+  /** A field of class Session by name; Scala may compile a private member under a
+   *  mangled name (`isabelle$Session$$name`). */
   private def field(session: isabelle.Session, name: String): AnyRef = {
-    val f = session_class.getDeclaredField(name)
+    val f = session_class.getDeclaredFields.find(f =>
+      f.getName == name || f.getName.endsWith("$$" + name)).getOrElse(
+        throw new NoSuchFieldException(name))
     f.setAccessible(true)
     f.get(session)
   }
@@ -62,13 +66,13 @@ object Session_Teardown {
   private def bounded(what: String, problems: mutable.ListBuffer[String],
       stuck: => Option[Thread] = None)(body: => Unit): Unit = {
     val error = Synchronized[Option[String]](None)
-    val worker = new Thread(() =>
+    val worker = new Thread(new Runnable { def run(): Unit =
       try body
       catch {
         case e: java.lang.reflect.InvocationTargetException if e.getCause != null =>
           error.change(_ => Some(Exn.message(e.getCause.nn)))
         case e: Throwable => error.change(_ => Some(Exn.message(e)))
-      }, "session_teardown:" + what)
+      } }, "session_teardown:" + what)
     worker.setDaemon(true)
     worker.start()
     worker.join((STEP_WAIT_S * 1000).toLong)
@@ -96,7 +100,34 @@ object Session_Teardown {
       }
     }
 
-    // 2. The threads Session.stop() did not reach, in its order.
+    // 2. What the manager does when the prover has exited (Session.handle_exit):
+    //    protocol handlers stop their threads and processes (Naproche server,
+    //    Simplifier_Trace manager), file formats end their session, and the phase
+    //    becomes Terminated. The phase also wakes any thread blocked in stop().
+    bounded("protocol_handlers", problems) {
+      field(session, "protocol_handlers") match {
+        case handlers: Protocol_Handlers => handlers.exit(Document.State.init)
+        case other => error("unexpected " + other)
+      }
+    }
+    bounded("file_formats", problems) {
+      field(session, "file_formats$lzy1") match {
+        case formats: File_Format.Session => formats.stop_session()
+        case _ =>  // never initialized
+      }
+    }
+    bounded("phase", problems) {
+      field(session, "_phase") match {
+        case phase: Synchronized[?] =>
+          phase.asInstanceOf[Synchronized[isabelle.Session.Phase]].change {
+            case terminated: isabelle.Session.Terminated => terminated
+            case _ => isabelle.Session.Terminated(Process_Result(1))
+          }
+        case other => error("unexpected " + other)
+      }
+    }
+
+    // 3. The threads Session.stop() did not reach, in its order.
     bounded("nodes_status_buffer", problems) {
       call(member_object(session, "nodes_status_buffer"), "shutdown")
     }

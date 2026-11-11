@@ -43,20 +43,20 @@ object ReplBackendGateway {
 
   /** ISABELLE_GATEWAY_FATAL_ON_VM_ERROR=false keeps the old behaviour (diagnostics). */
   private val fatal_on_vm_error: Boolean =
-    !sys.env.get("ISABELLE_GATEWAY_FATAL_ON_VM_ERROR").map(_.trim.toLowerCase).exists(
+    !sys.env.get("ISABELLE_GATEWAY_FATAL_ON_VM_ERROR").map(_.trim.nn.toLowerCase).exists(
       Set("0", "false", "no", "off"))
 
   /** Records a thread that died of a VirtualMachineError; prints every uncaught
    *  exception as the JVM default handler does. */
   val uncaught_handler: Thread.UncaughtExceptionHandler =
-    (thread: Thread, exn: Throwable) => {
-      exn match {
-        case _: VirtualMachineError => note_fatal(s"thread \"${thread.getName}\" died", exn)
+    new Thread.UncaughtExceptionHandler { def uncaughtException(thread: Thread | Null, exn: Throwable | Null): Unit = {
+      exn.nn match {
+        case _: VirtualMachineError => note_fatal(s"thread \"${thread.nn.getName}\" died", exn.nn)
         case _ =>
       }
-      System.err.print(s"Exception in thread \"${thread.getName}\" ")
-      exn.printStackTrace(System.err)
-    }
+      System.err.nn.print(s"Exception in thread \"${thread.nn.getName}\" ")
+      exn.nn.printStackTrace(System.err)
+    } }
 
   def get_repl_backend(show_states: Boolean): ReplBackend = new ReplBackend(show_states)
   def get_repl_backend_with_cache(show_states: Boolean, enable_cache: Boolean): ReplBackend = 
