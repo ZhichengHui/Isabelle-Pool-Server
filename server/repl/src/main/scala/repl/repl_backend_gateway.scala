@@ -16,8 +16,47 @@ object ReplBackendGateway {
    *  answers false instead of 500ing — letting the Python side distinguish
    *  a wedged-but-alive JVM from a healthy one and trigger crash recovery. */
   def alive(): Boolean =
-    try { Event_Timer.request(new Console_Logger(), isabelle.Time.now()) { () }; true }
-    catch { case _: IllegalStateException => false }
+    fatal.isEmpty &&
+    (try { Event_Timer.request(new Console_Logger(), isabelle.Time.now()) { () }; true }
+     catch { case _: IllegalStateException => false })
+
+  /* Fatal JVM errors.
+
+     A thread that dies of an OutOfMemoryError leaves its session broken for good:
+     when it is `Isabelle.Session.manager`, the session can neither work nor be
+     stopped normally. On 2026-11-11 such sessions kept the heap full, so the JVM
+     spent its CPU in GC and every new session start hung, while the liveness probe
+     still answered true. Once a thread has died of a VirtualMachineError (or a
+     session start failed with one), `alive` answers false, and the Python side
+     replaces the gateway (`_ensure_gateway` / the cleanup sweep). */
+
+  @volatile private var fatal: Option[String] = None
+
+  /** Why the gateway counts as dead ("" while it does not). */
+  def fatal_error(): String = fatal.getOrElse("")
+
+  def note_fatal(where: String, exn: Throwable): Unit =
+    if (fatal.isEmpty && fatal_on_vm_error) {
+      fatal = Some(s"$where: ${exn.getClass.getName}: ${exn.getMessage}")
+      Output.error_message(s"Gateway marked dead: ${fatal.get}")
+    }
+
+  /** ISABELLE_GATEWAY_FATAL_ON_VM_ERROR=false keeps the old behaviour (diagnostics). */
+  private val fatal_on_vm_error: Boolean =
+    !sys.env.get("ISABELLE_GATEWAY_FATAL_ON_VM_ERROR").map(_.trim.toLowerCase).exists(
+      Set("0", "false", "no", "off"))
+
+  /** Records a thread that died of a VirtualMachineError; prints every uncaught
+   *  exception as the JVM default handler does. */
+  val uncaught_handler: Thread.UncaughtExceptionHandler =
+    (thread: Thread, exn: Throwable) => {
+      exn match {
+        case _: VirtualMachineError => note_fatal(s"thread \"${thread.getName}\" died", exn)
+        case _ =>
+      }
+      System.err.print(s"Exception in thread \"${thread.getName}\" ")
+      exn.printStackTrace(System.err)
+    }
 
   def get_repl_backend(show_states: Boolean): ReplBackend = new ReplBackend(show_states)
   def get_repl_backend_with_cache(show_states: Boolean, enable_cache: Boolean): ReplBackend = 
@@ -136,6 +175,7 @@ object ReplBackendGateway {
 
 object Gateway_App {
   def main(args: Array[String]): Unit = {
+    Thread.setDefaultUncaughtExceptionHandler(ReplBackendGateway.uncaught_handler)
     val gateway = new GatewayServer(ReplBackendGateway, 0)
     gateway.start()
     val port = gateway.getListeningPort

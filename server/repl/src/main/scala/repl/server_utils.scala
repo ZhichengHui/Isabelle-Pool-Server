@@ -109,6 +109,10 @@ object Server_Utils {
         result_cell.change(_ => Some(res))
       } catch {
         case t: Throwable =>
+          t match {
+            case _: VirtualMachineError => ReplBackendGateway.note_fatal("session start", t)
+            case _ =>
+          }
           error_cell.change(_ => Some(t))
           Output.error_message(s"Session_Start failed for session='$field' options=${options.mkString(",")}: ${Exn.message(t)}")
       }
@@ -136,7 +140,25 @@ object Server_Utils {
     val session =
       try server.the_session(session_id)
       catch { case ERROR(_) => Output.writeln(s"Session ${session_id} already stopped."); return }
-    val (session_stop_json, _) = Server_Commands.Session_Stop.command(session)
+    val (session_stop_json, _) =
+      try Server_Commands.Session_Stop.command(session)
+      catch {
+        case exn: Throwable =>
+          // Session.stop() gave up half way (its manager thread is dead, e.g. after
+          // an OutOfMemoryError). A retry cannot help: stop() now waits for ever on
+          // the Shutdown phase. Finish the teardown ourselves and unregister the
+          // session, so neither its threads nor this server keep its state alive.
+          val problems = Session_Teardown.force(session)
+          try server.remove_session(session_id)
+          catch { case ERROR(_) => }
+          if (problems.isEmpty) {
+            Output.error_message(s"Session ${session_id}: stop failed (${Exn.message(exn)}); " +
+              "forced teardown done")
+            return
+          }
+          else error(s"Session ${session_id}: stop failed (${Exn.message(exn)}); " +
+            "forced teardown incomplete: " + problems.mkString("; "))
+      }
     try server.remove_session(session_id)
     catch { case ERROR(_) => }  // a concurrent stop of the same session removed it
 

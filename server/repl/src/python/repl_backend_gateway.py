@@ -217,7 +217,21 @@ class ReplBackendGatewayProcess:
             future = pool.submit(
                 self.gateway.jvm.repl.ReplBackendGateway.alive
             )
-            return bool(future.result(timeout=self.PROBE_TIMEOUT))
+            alive = bool(future.result(timeout=self.PROBE_TIMEOUT))
+            if not alive:
+                # Why: a thread died of an OutOfMemoryError (the JVM marks itself
+                # dead), or the Event_Timer is wedged (Bug 9). Bounded like the probe.
+                try:
+                    reason = pool.submit(
+                        self.gateway.jvm.repl.ReplBackendGateway.fatal_error
+                    ).result(timeout=self.PROBE_TIMEOUT)
+                except Exception:
+                    reason = ""
+                logger.error(
+                    "gateway liveness probe answered false: %s",
+                    reason or "Event_Timer wedged (docs/ISSUES.md Bug 9)",
+                )
+            return alive
         except Exception as e:
             logger.warning(
                 "gateway liveness probe failed: %s: %s", type(e).__name__, e
