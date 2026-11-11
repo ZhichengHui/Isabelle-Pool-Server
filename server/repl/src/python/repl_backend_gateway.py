@@ -8,7 +8,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Protocol
+from typing import Optional, Protocol
 
 import py4j
 import py4j.java_collections
@@ -153,6 +153,12 @@ class ReplBackendGatewayProcess:
             raise RuntimeError(
                 "Scala REPL gateway process failed to start (stdout is None)."
             )
+        try:
+            # never ended as a prover's tree (process_tree.tree_root / kill_trees)
+            self._pgid: Optional[int] = os.getpgid(self.process.pid)
+            process_tree.protect_group(self._pgid)
+        except OSError:
+            self._pgid = None
         port = self._read_port(self.process.stdout)
         # Keep the pipe open and pump the JVM's remaining stdout into the
         # durable log — closing it here (the old behavior) silently discarded
@@ -217,7 +223,21 @@ class ReplBackendGatewayProcess:
             future = pool.submit(
                 self.gateway.jvm.repl.ReplBackendGateway.alive
             )
-            return bool(future.result(timeout=self.PROBE_TIMEOUT))
+            alive = bool(future.result(timeout=self.PROBE_TIMEOUT))
+            if not alive:
+                # Why: a thread died of an OutOfMemoryError (the JVM marks itself
+                # dead), or the Event_Timer is wedged (Bug 9). Bounded like the probe.
+                try:
+                    reason = pool.submit(
+                        self.gateway.jvm.repl.ReplBackendGateway.fatal_error
+                    ).result(timeout=self.PROBE_TIMEOUT)
+                except Exception:
+                    reason = ""
+                logger.error(
+                    "gateway liveness probe answered false: %s",
+                    reason or "Event_Timer wedged (docs/ISSUES.md Bug 9)",
+                )
+            return alive
         except Exception as e:
             logger.warning(
                 "gateway liveness probe failed: %s: %s", type(e).__name__, e
@@ -453,6 +473,10 @@ class ReplBackendGatewayProcess:
         # above do not reach them, and once the JVM is gone (killed here, or
         # OOM-killed before recovery) init has adopted them: they are found by
         # the marker every process of this gateway inherited.
+        # The gateway's group is gone (killed above): it no longer needs protection.
+        pgid = getattr(self, "_pgid", None)
+        if pgid is not None:
+            process_tree.unprotect_group(pgid)
         marker = getattr(self, "marker", None)
         left = process_tree.marked(GATEWAY_MARK_KEY, marker) if marker else []
         survivors = process_tree.kill_trees(left, grace=self.TERMINATE_WAIT)

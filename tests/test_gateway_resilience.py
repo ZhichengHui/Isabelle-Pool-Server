@@ -39,6 +39,7 @@ class _FakePopen:
         self.kwargs = kwargs
         self.stdout = _FakeStream(["37963\n", "jvm says hello\n"])
         self.returncode = None
+        self.pid = 999_999_999  # no such process: the gateway group is not protected
 
     def poll(self):
         return self.returncode
@@ -100,6 +101,7 @@ def _bare_manager(gateway):
     mgr.gateway = gateway
     mgr._lock = threading.Lock()
     mgr._lru = {}
+    mgr._creating_tags = set()
     mgr.thy_init = object()
     return mgr
 
@@ -121,6 +123,7 @@ def test_backend_creation_wall_timeout(monkeypatch):
     mgr.gateway = object()
     mgr._lock = threading.Lock()
     mgr._lru = {}
+    mgr._creating_tags = set()
     mgr.thy_init = object()
     mgr.memory_management_enabled = False
 

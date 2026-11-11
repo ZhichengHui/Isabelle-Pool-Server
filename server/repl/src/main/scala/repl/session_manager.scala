@@ -271,10 +271,19 @@ class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_c
   private def stop_session_quietly(session_id: UUID.T): Boolean =
     try { Server_Utils.stop_session(server_info, server, session_id); true }
     catch {
+      case e: Server_Utils.Teardown_Incomplete =>
+        // unregistered already, so a retry cannot reach it: remember it for the report
+        Output.error_message(s"Error stopping session ${session_id}: ${Exn.message(e)}")
+        teardown_incomplete.change(_ += session_id)
+        true
       case e: Throwable =>
         Output.error_message(s"Error stopping session ${session_id}: ${Exn.message(e)}")
         false
     }
+
+  /** Sessions whose stop failed and whose forced teardown was incomplete. */
+  private val teardown_incomplete: Synchronized[mutable.Set[UUID.T]] =
+    Synchronized(mutable.Set.empty)
 
   def remove_session_async(session_id: UUID.T): Unit = {
     val removal_future = Future.fork[Unit] { remove_session_sync(session_id) }
@@ -327,17 +336,15 @@ class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_c
           Output.error_message(s"Error during session removal: ${Exn.message(e)}")
       }
     }
-    session_cache.change { cache =>
-      cache.values.foreach(_.foreach(session_data => remove_session_async(session_data.id)))
-      cache.clear()
-      cache
-    }
+    // Every cached session is also in running_sessions, so it was stopped above
+    // (or is retried below): only forget the cache, start no second removal.
+    session_cache.change { cache => cache.clear(); cache }
     
     lru_order.change(lru => { lru.clear(); lru })
 
     // Retry the sessions whose stop failed (they are still registered).
     apply_foreach(running_sessions)(id => remove_session_sync(id))
-    val failed = running_sessions.value.toList
+    val failed = running_sessions.value.toList ++ teardown_incomplete.value.toList
 
     // Server shutdown also stops every session still registered with the server.
     try Server_Utils.stop_server(server_info)

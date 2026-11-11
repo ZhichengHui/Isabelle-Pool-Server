@@ -58,6 +58,7 @@ class SessionManagerHelpersMixin:
     rss_totals: Callable[..., Dict[str, float]]
     sample_sessions_rss: Callable[..., Dict[str, int]]
     pick_evictable_locked: Callable[..., Any]
+    reap_orphan_backends: Callable[[], List[str]]  # BackendReaperMixin
     cleanup_interval: float
 
     # ----- gateway lifecycle / recovery -----------------------------------
@@ -368,9 +369,7 @@ class SessionManagerHelpersMixin:
             # (the reaper's own calls are time-bounded too): stop every JVM backend
             # (and its prover) that no registered session or creation in flight
             # owns (backend_reaper.py).
-            reap = getattr(self, "reap_orphan_backends", None)
-            if reap is not None:
-                await asyncio.to_thread(reap)
+            await asyncio.to_thread(self.reap_orphan_backends)
         return closed
 
     def start_cleanup_task(self) -> None:

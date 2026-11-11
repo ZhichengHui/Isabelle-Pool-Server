@@ -109,6 +109,10 @@ object Server_Utils {
         result_cell.change(_ => Some(res))
       } catch {
         case t: Throwable =>
+          t match {
+            case _: OutOfMemoryError => ReplBackendGateway.note_fatal("session start", t)
+            case _ =>
+          }
           error_cell.change(_ => Some(t))
           Output.error_message(s"Session_Start failed for session='$field' options=${options.mkString(",")}: ${Exn.message(t)}")
       }
@@ -126,6 +130,11 @@ object Server_Utils {
   session_id
   }
 
+  /** The session's stop failed and the forced teardown left something behind. The
+   *  session is unregistered already: a retry cannot reach it, the caller must
+   *  report it as not stopped. */
+  final class Teardown_Incomplete(msg: String) extends RuntimeException(msg)
+
   def stop_session(
       server_info: Server.Info,
       server: Server,
@@ -136,7 +145,35 @@ object Server_Utils {
     val session =
       try server.the_session(session_id)
       catch { case ERROR(_) => Output.writeln(s"Session ${session_id} already stopped."); return }
-    val (session_stop_json, _) = Server_Commands.Session_Stop.command(session)
+    val (session_stop_json, _) =
+      try Server_Commands.Session_Stop.command(session)
+      catch {
+        case exn: Throwable if session.phase.isInstanceOf[isabelle.Session.Terminated] =>
+          // stop() completed; Session_Stop only reports a nonzero prover return
+          // code (e.g. a killed prover) as Server.Error. The prover exited before
+          // the Stop, so the timer delays are still armed and hold the session.
+          for (problem <- Session_Teardown.cancel_delays(session))
+            Output.warning(s"Session ${session_id}: $problem")
+          try server.remove_session(session_id)
+          catch { case ERROR(_) => }
+          Output.writeln(s"Stopped session ${session_id}: ${Exn.message(exn)}")
+          return
+        case exn: Throwable =>
+          // Session.stop() gave up half way (its manager thread is dead, e.g. after
+          // an OutOfMemoryError). A retry cannot help: stop() now waits for ever on
+          // the Shutdown phase. Finish the teardown ourselves and unregister the
+          // session, so neither its threads nor this server keep its state alive.
+          val problems = Session_Teardown.force(session)
+          try server.remove_session(session_id)
+          catch { case ERROR(_) => }
+          if (problems.isEmpty) {
+            Output.error_message(s"Session ${session_id}: stop failed (${Exn.message(exn)}); " +
+              "forced teardown done")
+            return
+          }
+          else throw new Teardown_Incomplete(s"Session ${session_id}: stop failed " +
+            s"(${Exn.message(exn)}); forced teardown incomplete: " + problems.mkString("; "))
+      }
     try server.remove_session(session_id)
     catch { case ERROR(_) => }  // a concurrent stop of the same session removed it
 

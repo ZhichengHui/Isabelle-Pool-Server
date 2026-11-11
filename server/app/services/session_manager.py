@@ -4,7 +4,7 @@ import asyncio
 import threading
 import uuid
 from collections import OrderedDict
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Set, Tuple, Union
 
 from server.repl.src.python.repl_backend_gateway import ReplBackendGatewayProcess
 from server.repl.src.python.thy_init import ThyInit
@@ -51,6 +51,8 @@ class SessionManager(SessionManagerHelpersMixin, MemoryPolicyMixin, FillJobMixin
 
         self._lru: "OrderedDict[uuid.UUID, _Isabelle_Session]" = OrderedDict()
         self._lock = threading.Lock()
+        # tags of the backend creations in flight (backend_reaper.py), under _lock
+        self._creating_tags: Set[str] = set()
         self._cleanup_task: Optional[asyncio.Task] = None
 
         # Container-aware memory management (replaces the old Scala JVM-heap
@@ -296,8 +298,10 @@ class SessionManager(SessionManagerHelpersMixin, MemoryPolicyMixin, FillJobMixin
                     task_group=task_group,
                 )
             except Exception as e:
-                await asyncio.to_thread(backend.close)
-                self.end_backend_create(tag)
+                try:
+                    await asyncio.to_thread(backend.close)
+                finally:  # also when the request is cancelled during the close
+                    self.end_backend_create(tag)
                 logger.exception("failed to create session object for session_id=%s", session_id)
                 raise RuntimeError(f"{where}: failed to create session object for session {session_id}: {e}") from e
 

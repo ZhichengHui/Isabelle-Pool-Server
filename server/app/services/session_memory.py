@@ -304,7 +304,10 @@ class MemoryAwareSession(SessionMemoryMixin, SessionFillMixin, _Isabelle_Session
         finally:
             # running(): a zombie (ended, not yet collected by its parent) is
             # still listed in /proc but is not a prover left running.
-            if pid is not None and proc_matches(pid, starttime) and process_tree.running(pid):
+            # Only with a known start time: a bare pid may have been reused by an
+            # unrelated process since the prover ended.
+            if (pid is not None and starttime is not None and proc_matches(pid, starttime)
+                    and process_tree.running(pid)):
                 ended = process_tree.kill_trees([process_tree.tree_root(pid)])
                 logger.error(
                     "prover pid=%s still ran after the backend closed; ended %d process(es)",
