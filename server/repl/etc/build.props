@@ -17,6 +17,7 @@ sources = \
   src/main/scala/repl/repl_session.scala \
   src/main/scala/repl/server_utils.scala \
   src/main/scala/repl/session_manager.scala \
+  src/main/scala/repl/session_teardown.scala \
   src/main/scala/repl/thy_info.scala \
   src/main/scala/repl/thy_parsing.scala \
   src/main/scala/repl/thy_status.scala

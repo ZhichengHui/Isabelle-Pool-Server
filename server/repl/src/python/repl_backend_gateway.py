@@ -6,8 +6,9 @@ import signal
 import subprocess
 import threading
 import time
+import uuid
 from pathlib import Path
-from typing import Protocol
+from typing import Optional, Protocol
 
 import py4j
 import py4j.java_collections
@@ -15,6 +16,7 @@ from py4j.java_gateway import GatewayParameters, JavaGateway
 
 from server.app.core.config import Logging, Repl
 from server.app.core.logging import get_logger
+from server.repl.src.python import process_tree
 
 logger = get_logger(__name__)
 
@@ -24,6 +26,10 @@ logger = get_logger(__name__)
 REPL_ROOT = Path(__file__).resolve().parent.parent.parent
 repl_gateway_path = REPL_ROOT / "src" / "main" / "scala" / "repl" / "repl_backend_gateway.scala"
 isabelle_executable = Path(os.environ.get("ISABELLE_HOME", "/opt/isabelle")) / "bin" / "isabelle"
+
+
+#: Environment variable that marks every process of one gateway (see terminate).
+GATEWAY_MARK_KEY = "ISABELLE_POOL_GATEWAY_MARK"
 
 
 def _gateway_log_dir() -> Path:
@@ -129,8 +135,13 @@ class ReplBackendGatewayProcess:
         self._jvm_log = open(  # noqa: SIM115 — lives as long as the process
             log_dir / "gateway-jvm.log", "a", buffering=1, encoding="utf-8"
         )
+        # Every process this gateway starts inherits the marker (provers too,
+        # also after the JVM died and init adopted them): terminate() finds and
+        # ends them by it, without the JVM and without trusting recorded pids.
+        self.marker = uuid.uuid4().hex
         self.process = subprocess.Popen(
             [isabelle_executable, "scala", str(repl_gateway_path)],
+            env={**os.environ, GATEWAY_MARK_KEY: self.marker},
             # Isabelle uses many child processes, so we start a new process group
             preexec_fn=os.setsid,
             # Port number will be passed via stdout
@@ -142,6 +153,12 @@ class ReplBackendGatewayProcess:
             raise RuntimeError(
                 "Scala REPL gateway process failed to start (stdout is None)."
             )
+        try:
+            # never ended as a prover's tree (process_tree.tree_root / kill_trees)
+            self._pgid: Optional[int] = os.getpgid(self.process.pid)
+            process_tree.protect_group(self._pgid)
+        except OSError:
+            self._pgid = None
         port = self._read_port(self.process.stdout)
         # Keep the pipe open and pump the JVM's remaining stdout into the
         # durable log — closing it here (the old behavior) silently discarded
@@ -206,7 +223,21 @@ class ReplBackendGatewayProcess:
             future = pool.submit(
                 self.gateway.jvm.repl.ReplBackendGateway.alive
             )
-            return bool(future.result(timeout=self.PROBE_TIMEOUT))
+            alive = bool(future.result(timeout=self.PROBE_TIMEOUT))
+            if not alive:
+                # Why: a thread died of an OutOfMemoryError (the JVM marks itself
+                # dead), or the Event_Timer is wedged (Bug 9). Bounded like the probe.
+                try:
+                    reason = pool.submit(
+                        self.gateway.jvm.repl.ReplBackendGateway.fatal_error
+                    ).result(timeout=self.PROBE_TIMEOUT)
+                except Exception:
+                    reason = ""
+                logger.error(
+                    "gateway liveness probe answered false: %s",
+                    reason or "Event_Timer wedged (docs/ISSUES.md Bug 9)",
+                )
+            return alive
         except Exception as e:
             logger.warning(
                 "gateway liveness probe failed: %s: %s", type(e).__name__, e
@@ -333,6 +364,41 @@ class ReplBackendGatewayProcess:
             initial_thys, field,
         )
     
+    # Tagged backends (repl_backend_gateway.scala, "Tagged backends and the
+    # reaper"): the server tags each backend with its session id, so a backend it
+    # gave up on, or no longer holds, can be stopped without a handle to it.
+    def get_repl_backend_tagged(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+        self,
+        tag: str,
+        show_states: bool,
+        enable_cache: bool,
+        max_cache_size: int,
+        initial_thys: "py4j.java_collections.JavaList[str]",
+        field: str,
+        session_dirs: "py4j.java_collections.JavaList[str]",
+    ) -> ReplBackend:
+        return self._poll_gateway(
+            "get_repl_backend_tagged",
+            tag, show_states, enable_cache, max_cache_size,
+            initial_thys, field, session_dirs,
+        )
+
+    def close_backend(self, tag: str) -> bool:
+        """Stop (in the JVM, in the background) the backend tagged ``tag``."""
+        return bool(self.gateway.jvm.repl.ReplBackendGateway.close_backend(tag))
+
+    def reap_fence(self) -> int:
+        return int(self.gateway.jvm.repl.ReplBackendGateway.reap_fence())
+
+    def reap_backends(self, live: "list[str]", fence: int) -> "list[str]":
+        """Stop every tagged backend registered at or before ``fence`` whose tag
+        is not in ``live``; returns the tags stopped."""
+        java_live = self.gateway.jvm.java.util.ArrayList()
+        for tag in live:
+            java_live.add(tag)
+        reaped = self.gateway.jvm.repl.ReplBackendGateway.reap_backends(java_live, fence)
+        return [str(t) for t in reaped]
+
     def _signal_group(self, sig: int) -> None:
         """Send ``sig`` to the gateway's whole process group.
 
@@ -402,4 +468,20 @@ class ReplBackendGatewayProcess:
             self.process.wait(timeout=2)
         except Exception:
             pass
+        # Step 6: end the prover trees that outlived the JVM. They are in their
+        # own process groups (bash_process calls setsid), so the group signals
+        # above do not reach them, and once the JVM is gone (killed here, or
+        # OOM-killed before recovery) init has adopted them: they are found by
+        # the marker every process of this gateway inherited.
+        # The gateway's group is gone (killed above): it no longer needs protection.
+        pgid = getattr(self, "_pgid", None)
+        if pgid is not None:
+            process_tree.unprotect_group(pgid)
+        marker = getattr(self, "marker", None)
+        left = process_tree.marked(GATEWAY_MARK_KEY, marker) if marker else []
+        survivors = process_tree.kill_trees(left, grace=self.TERMINATE_WAIT)
+        if survivors:
+            logger.warning(
+                "ended %d process(es) left behind by the gateway JVM", len(survivors)
+            )
         print("Gateway process group terminated")

@@ -51,9 +51,11 @@ trait Backend_Lifecycle { this: ReplBackend =>
   }
 
   /** Shut down this backend: stop the session manager (and with it this
-   *  backend's Isabelle session). Called on session close; like every backend
-   *  call it must be serialized through the session's single worker thread
-   *  (ThreadedBackend). */
+   *  backend's Isabelle session and its prover process group). Called on
+   *  session close. Unlike every other backend call it is NOT serialized
+   *  through the session's worker thread (ThreadedBackend.close runs it on its
+   *  own thread): the worker may be blocked in a call that outlived its
+   *  request, and Session_Manager.shutdown is idempotent and thread-safe. */
   def exit(): Unit =
     session_manager_instance.shutdown()
 

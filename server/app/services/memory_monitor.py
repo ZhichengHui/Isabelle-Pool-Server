@@ -20,6 +20,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from server.app.core.config import Memory
 from server.app.core.logging import get_logger
+from server.repl.src.python import process_tree
 
 logger = get_logger(__name__)
 
@@ -203,12 +204,10 @@ def read_starttime(pid: int) -> Optional[int]:
     """Process start time (clock ticks since boot, field 22 of /proc/<pid>/stat).
     Together with the pid it identifies ONE process: a pid reused after a
     prover death carries a different start time (review a96f76d S1)."""
+    fields = process_tree.stat_fields(pid, _PROC_ROOT)
     try:
-        with open(f"{_PROC_ROOT}/{pid}/stat", "r", encoding="utf-8") as fh:
-            _, _, rest = fh.read().rpartition(")")
-        fields = rest.split()
-        return int(fields[19]) if len(fields) > 19 else None  # state is fields[0]
-    except (OSError, ValueError, IndexError):
+        return int(fields[19]) if fields and len(fields) > 19 else None  # state is fields[0]
+    except ValueError:
         return None
 
 

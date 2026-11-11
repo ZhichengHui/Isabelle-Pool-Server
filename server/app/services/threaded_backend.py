@@ -40,16 +40,10 @@ class ThreadedBackend:
         return self._backend
 
     def submit(self, fn: Callable[[], Any]) -> concurrent.futures.Future:
+        fut: concurrent.futures.Future = concurrent.futures.Future()
         if self._shutting_down.is_set():
-            fut: concurrent.futures.Future = concurrent.futures.Future()
             fut.set_exception(RuntimeError(f"Backend {self._name} is shutting down"))
             return fut
-        return self._submit_unchecked(fn)
-
-    def _submit_unchecked(self, fn: Callable[[], Any]) -> concurrent.futures.Future:
-        """Enqueue without the shutdown guard. Only close() may use this, to
-        deliver the final exit() job after external submissions are rejected."""
-        fut: concurrent.futures.Future = concurrent.futures.Future()
         self._q.put(_Job(fn=fn, fut=fut, ctx=contextvars.copy_context()))
         logger.debug("job submitted to threaded backend worker=%s queue_size=%s", self._name, self._q.qsize())
         return fut
@@ -88,15 +82,34 @@ class ThreadedBackend:
         if cancelled:
             logger.info("cancelled %s pending jobs during shutdown worker=%s", cancelled, self._name)
 
-        # 2. Ask the JVM to exit gracefully. Must bypass the shutdown guard set
-        #    above — submit() would reject this job and the Scala session
-        #    (poly process + in-JVM Isabelle server) would never be torn down.
-        exit_fut = self._submit_unchecked(self._backend.exit)
+        # 2. Ask the JVM to stop this backend's Isabelle sessions (poly process
+        #    trees + in-JVM Isabelle server). exit() runs on its OWN thread, not
+        #    queued behind the worker: the worker may still be inside a call
+        #    whose request already timed out (a reset or load that outlives its
+        #    budget). Queued, exit() waited for that call; after EXIT_TIMEOUT
+        #    the worker was stopped and the queued exit() was never run, so the
+        #    session left the registry while its prover kept running for hours.
+        #    Session_Manager.shutdown (Scala) is idempotent and safe to run
+        #    concurrently with the in-flight call; stopping the prover also
+        #    ends that call.
+        exit_fut = self._run_exit()
         try:
             exit_fut.result(timeout=self.EXIT_TIMEOUT)
         except Exception:
-            logger.exception("backend exit raised during close worker=%s", self._name)
+            logger.exception("backend exit failed or timed out during close worker=%s", self._name)
         finally:
             self._stop.set()
             self._t.join(timeout=self.JOIN_TIMEOUT)
             logger.info("threaded backend closed worker=%s", self._name)
+
+    def _run_exit(self) -> concurrent.futures.Future:
+        fut: concurrent.futures.Future = concurrent.futures.Future()
+
+        def run() -> None:
+            try:
+                fut.set_result(self._backend.exit())
+            except BaseException as e:  # pylint: disable=broad-exception-caught
+                fut.set_exception(e)
+
+        threading.Thread(target=run, name=f"{self._name}-exit", daemon=True).start()
+        return fut

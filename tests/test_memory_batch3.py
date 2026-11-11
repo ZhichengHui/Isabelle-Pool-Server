@@ -431,6 +431,12 @@ class _FakeGateway:
         self.created += 1
         return _FakeRaw()
 
+    def get_repl_backend_tagged(self, tag, *args):  # the server's factory (backend_reaper.py)
+        return self.get_repl_backend_with_initial_theories()
+
+    def close_backend(self, tag):
+        return False
+
     def is_alive(self):
         return True
 

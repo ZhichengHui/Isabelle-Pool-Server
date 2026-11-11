@@ -28,13 +28,18 @@ _gateway_lock = threading.Lock()
 logger = get_logger(__name__)
 
 
-def _factory_call(gw, loaded_theories, session_dirs, field: str):
+def _factory_call(gw, loaded_theories, session_dirs, field: str, tag: Optional[str] = None):
     java_list = gw.gateway.jvm.java.util.ArrayList()
     for thy in loaded_theories:
         java_list.add(thy)
     java_dirs = gw.gateway.jvm.java.util.ArrayList()
     for d in session_dirs or []:
         java_dirs.add(d)
+    if tag is not None:  # registered in the JVM before the prover starts (backend_reaper.py)
+        return gw.get_repl_backend_tagged(
+            tag, Server.SHOW_STATES, Server.ENABLE_CACHE, Server.MAX_CACHE_SIZE,
+            java_list, field, java_dirs,
+        )
     return gw.get_repl_backend_with_initial_theories(
         show_states=Server.SHOW_STATES,
         enable_cache=Server.ENABLE_CACHE,
@@ -53,6 +58,7 @@ class SessionManagerHelpersMixin:
     rss_totals: Callable[..., Dict[str, float]]
     sample_sessions_rss: Callable[..., Dict[str, int]]
     pick_evictable_locked: Callable[..., Any]
+    reap_orphan_backends: Callable[[], List[str]]  # BackendReaperMixin
     cleanup_interval: float
 
     # ----- gateway lifecycle / recovery -----------------------------------
@@ -80,7 +86,7 @@ class SessionManagerHelpersMixin:
             logger.exception("failed to start REPL gateway")
             raise GatewayUnavailable(f"{where}: failed to start REPL gateway: {e}") from e
 
-    def create_raw_backend(self, loaded_theories, session_dirs, field: str):
+    def create_raw_backend(self, loaded_theories, session_dirs, field: str, tag: Optional[str] = None):
         """The Py4J factory call that starts one session backend (a worker thread).
         With Server.PARALLEL_SESSION_CREATE the gateway lock is held only to read the
         gateway (against a concurrent rebuild), so several sessions start at once;
@@ -88,9 +94,9 @@ class SessionManagerHelpersMixin:
         if Server.PARALLEL_SESSION_CREATE:
             with _gateway_lock:
                 gw = self.gateway
-            return _factory_call(gw, loaded_theories, session_dirs, field)
+            return _factory_call(gw, loaded_theories, session_dirs, field, tag)
         with _gateway_lock:
-            return _factory_call(self.gateway, loaded_theories, session_dirs, field)
+            return _factory_call(self.gateway, loaded_theories, session_dirs, field, tag)
 
     #: Seconds a functional liveness result is cached, so health probes don't
     #: pay a Py4J round-trip per request.
@@ -358,6 +364,12 @@ class SessionManagerHelpersMixin:
                 await asyncio.to_thread(self._ensure_gateway)
             except Exception:
                 logger.exception("background gateway recovery failed")
+        elif self.gateway is not None:
+            # Backstop, only on a gateway that just answered the liveness probe
+            # (the reaper's own calls are time-bounded too): stop every JVM backend
+            # (and its prover) that no registered session or creation in flight
+            # owns (backend_reaper.py).
+            await asyncio.to_thread(self.reap_orphan_backends)
         return closed
 
     def start_cleanup_task(self) -> None:

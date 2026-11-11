@@ -4,7 +4,7 @@ import asyncio
 import threading
 import uuid
 from collections import OrderedDict
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Set, Tuple, Union
 
 from server.repl.src.python.repl_backend_gateway import ReplBackendGatewayProcess
 from server.repl.src.python.thy_init import ThyInit
@@ -12,6 +12,7 @@ from server.app.core.config import Memory, Server, Timeouts
 from server.app.core.logging import get_logger, logging_context
 from server.app.core import metrics
 from server.app.errors import GatewayUnavailable, PoolExhausted, SessionBusyError, SessionNotFound, SessionStartError
+from server.app.services.backend_reaper import BackendReaperMixin
 from server.app.services.memory_monitor import MemoryMonitor
 from server.app.services.fill_sorries import FillJobMixin
 from server.app.services.memory_policy import MemoryPolicyMixin
@@ -30,7 +31,7 @@ from server.app.services.session_manager_helpers import (
 logger = get_logger(__name__)
 
 
-class SessionManager(SessionManagerHelpersMixin, MemoryPolicyMixin, FillJobMixin):
+class SessionManager(SessionManagerHelpersMixin, MemoryPolicyMixin, FillJobMixin, BackendReaperMixin):
 
     def __init__(
         self,
@@ -50,6 +51,8 @@ class SessionManager(SessionManagerHelpersMixin, MemoryPolicyMixin, FillJobMixin
 
         self._lru: "OrderedDict[uuid.UUID, _Isabelle_Session]" = OrderedDict()
         self._lock = threading.Lock()
+        # tags of the backend creations in flight (backend_reaper.py), under _lock
+        self._creating_tags: Set[str] = set()
         self._cleanup_task: Optional[asyncio.Task] = None
 
         # Container-aware memory management (replaces the old Scala JVM-heap
@@ -232,7 +235,8 @@ class SessionManager(SessionManagerHelpersMixin, MemoryPolicyMixin, FillJobMixin
                         where, snap
                     )  # MemoryPressure: 503 + facts
             session_id = uuid.uuid4()
-
+            tag = str(session_id)  # the backend's tag in the JVM (backend_reaper.py)
+            self.begin_backend_create(tag)
             # Reserved here, the line before the try whose finally releases it
             # (structural: nothing can leak the reservation — review 0710afc S1).
             self.creates_in_flight += 1
@@ -243,8 +247,8 @@ class SessionManager(SessionManagerHelpersMixin, MemoryPolicyMixin, FillJobMixin
                     # ALL Py4J traffic (including building the ArrayList) stays
                     # in this worker thread: a synchronous gateway call on the
                     # event loop froze the whole server when the JVM was busy.
-                    return self.create_raw_backend(
-                        loaded_theories, session_dirs, normalized_field
+                    return self.create_tracked_backend(
+                        tag, loaded_theories, session_dirs, normalized_field
                     )
 
                 try:
@@ -252,6 +256,9 @@ class SessionManager(SessionManagerHelpersMixin, MemoryPolicyMixin, FillJobMixin
                         asyncio.to_thread(_create_backend),
                         timeout=Timeouts.SESSION_CREATE,
                     )
+                except BaseException:  # timeout, error, cancelled request: the JVM may
+                    self.abandon_backend_soon(tag)  # still be starting this prover
+                    raise
                 finally:
                     # the backend exists (or creation failed): release the reservation
                     self.creates_in_flight -= 1
@@ -275,6 +282,7 @@ class SessionManager(SessionManagerHelpersMixin, MemoryPolicyMixin, FillJobMixin
             try:
                 backend = ThreadedBackend(raw_backend, name=f"isabelle-{session_id.hex[:8]}")
             except Exception as e:
+                self.abandon_backend_soon(tag)
                 logger.exception("failed to create threaded backend for session_id=%s", session_id)
                 raise RuntimeError(f"{where}: failed to create threaded backend for session {session_id}: {e}") from e
 
@@ -290,7 +298,10 @@ class SessionManager(SessionManagerHelpersMixin, MemoryPolicyMixin, FillJobMixin
                     task_group=task_group,
                 )
             except Exception as e:
-                backend.close()
+                try:
+                    await asyncio.to_thread(backend.close)
+                finally:  # also when the request is cancelled during the close
+                    self.end_backend_create(tag)
                 logger.exception("failed to create session object for session_id=%s", session_id)
                 raise RuntimeError(f"{where}: failed to create session object for session {session_id}: {e}") from e
 
@@ -299,6 +310,7 @@ class SessionManager(SessionManagerHelpersMixin, MemoryPolicyMixin, FillJobMixin
                 pool_full = False
                 with self._lock:
                     self._lru[session_id] = session
+                    self._creating_tags.discard(tag)  # owned by the registry from now on
                     if lease_id is not None:
                         session.acquire_lease(lease_id)
                     self._lru.move_to_end(session_id, last=True)
@@ -326,7 +338,7 @@ class SessionManager(SessionManagerHelpersMixin, MemoryPolicyMixin, FillJobMixin
                         )
                 if pool_full:
                     metrics.pool_exhausted.labels("all_busy").inc()
-                    session.close()
+                    await asyncio.to_thread(session.close)
                     raise PoolExhausted(
                         f"Session pool is full ({self.pool_size} sessions) "
                         f"and all sessions are actively processing requests or leased. "
@@ -337,14 +349,14 @@ class SessionManager(SessionManagerHelpersMixin, MemoryPolicyMixin, FillJobMixin
                     try:
                         with logging_context(session_id=oldest_id, field=oldest.field):
                             logger.info("evicting idle LRU session because pool is full")
-                            oldest.close()
+                            await asyncio.to_thread(oldest.close)
                             metrics.sessions_evicted.labels("lru").inc()
                     except Exception:
                         logger.exception("failed to close evicted session session_id=%s", oldest_id)
             except PoolExhausted:
                 raise  # propagate without wrapping
             except Exception as e:
-                session.close()
+                await asyncio.to_thread(session.close)
                 logger.exception("failed to register session session_id=%s", session_id)
                 raise RuntimeError(f"{where}: failed to add session {session_id} to session manager: {e}") from e
 
