@@ -109,6 +109,7 @@ class ExecutionMixin(ClientBase):
         report: bool = False,
         lease_id: str | None = None,
         master_dir: str | None = None,
+        keep_on_timeout: bool = False,
     ) -> dict[str, Any]:
         """Replace the session's whole document with ``text`` (file-sync primitive).
 
@@ -134,6 +135,8 @@ class ExecutionMixin(ClientBase):
                 "timeout": budget, "report": report}
         if master_dir:
             body["master_dir"] = master_dir
+        if keep_on_timeout:
+            body["keep_on_timeout"] = True
         response = await self._request(
             "PUT",
             f"{BASE_URL}/{session_id}/document",

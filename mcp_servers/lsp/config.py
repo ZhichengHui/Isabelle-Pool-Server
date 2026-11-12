@@ -26,6 +26,9 @@ class Config:
     HTTP_TIMEOUT: float = env_float(_P, "HTTP_TIMEOUT", 600.0)
     # Wall budget (s) for load_document syncs and per-candidate attempt verification.
     LOAD_TIMEOUT: float = env_float(_P, "LOAD_TIMEOUT", 30.0)
+    # Elapsed seconds at which a long-running command or a timed-out attempt is reminded in the
+    # tool result (reminders.py): comma-separated, ascending; empty turns the reminders off.
+    REMINDER_S: str = env_str(_P, "REMINDER_S", "30,120,300,600")
     ATTEMPT_TIMEOUT: float = env_float(_P, "ATTEMPT_TIMEOUT", 180.0)
 
     # Concurrency cap for multi_attempt fan-out (bounded by the server pool).

@@ -162,6 +162,7 @@ async def load_document(
             request.timeout,
             request.report,
             **({"master_dir": request.master_dir} if request.master_dir else {}),
+            **({"keep_on_timeout": True} if request.keep_on_timeout else {}),
         ),
         session,
         session_manager,

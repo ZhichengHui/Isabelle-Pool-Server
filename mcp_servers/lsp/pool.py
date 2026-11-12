@@ -297,7 +297,7 @@ class LspPool(GymClientMixin):
                 result = await c.load_document(
                     binding.session_id, text, report=True,
                     timeout=Config.LOAD_TIMEOUT, lease_id=binding.lease_id,
-                    master_dir=master_dir_of(canon),
+                    master_dir=master_dir_of(canon), keep_on_timeout=True,
                 )
             except httpx.HTTPStatusError as e:
                 if not is_not_found(e):
@@ -312,7 +312,7 @@ class LspPool(GymClientMixin):
                 result = await c.load_document(
                     binding.session_id, text, report=True,
                     timeout=Config.LOAD_TIMEOUT, lease_id=binding.lease_id,
-                    master_dir=master_dir_of(canon),
+                    master_dir=master_dir_of(canon), keep_on_timeout=True,
                 )
             binding.cached_text = text
             binding.last_report = result.get("report") or {}
