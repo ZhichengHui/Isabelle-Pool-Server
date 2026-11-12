@@ -96,7 +96,7 @@ def field_for(suggested: Optional[str]) -> str:
     suggestion when Config.FIELD_FROM_IMPORTS is on and the header named a
     session image, else Config.DEFAULT_FIELD (ISABELLE_MCP_LSP_FIELD, "HOL":
     what the client sent on its own before the knob existed). An image the
-    server lacks is built on first use, inside the acquire."""
+    server lacks fails the acquire until it is built."""
     if Config.FIELD_FROM_IMPORTS and suggested:
         return suggested
     return Config.DEFAULT_FIELD

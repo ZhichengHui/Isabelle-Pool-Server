@@ -11,7 +11,7 @@ from server.repl.src.python.thy_init import ThyInit
 from server.app.core.config import Memory, Server, Timeouts
 from server.app.core.logging import get_logger, logging_context
 from server.app.core import metrics
-from server.app.errors import GatewayUnavailable, PoolExhausted, SessionBusyError, SessionNotFound, SessionStartError
+from server.app.errors import GatewayUnavailable, PoolExhausted, SessionBusyError, SessionNotFound, SessionStartError, raise_if_image_not_current
 from server.app.services.backend_reaper import BackendReaperMixin
 from server.app.services.memory_monitor import MemoryMonitor
 from server.app.services.fill_sorries import FillJobMixin
@@ -32,7 +32,6 @@ logger = get_logger(__name__)
 
 
 class SessionManager(SessionManagerHelpersMixin, MemoryPolicyMixin, FillJobMixin, BackendReaperMixin):
-
     def __init__(
         self,
         idle_timeout: float = Timeouts.SESSION_IDLE_TIMEOUT ,
@@ -276,6 +275,7 @@ class SessionManager(SessionManagerHelpersMixin, MemoryPolicyMixin, FillJobMixin
                     f"{Timeouts.SESSION_CREATE:.0f}s — gateway unresponsive"
                 ) from None
             except Exception as e:
+                raise_if_image_not_current(e)  # the image must be built first: 409, no stack trace
                 logger.exception("failed to create raw backend for session_id=%s", session_id)
                 raise RuntimeError(f"{where}: failed to create raw backend for session {session_id}: {e}") from e
 

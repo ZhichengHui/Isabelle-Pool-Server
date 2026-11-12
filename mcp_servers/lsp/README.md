@@ -126,7 +126,7 @@ parser (client wrapper: `async_client.parse_theory_header`).
 |---|---|---|
 | `..._GYM_URL` | `http://localhost:8000` | Isabelle Pool Server |
 | `..._FIELD` / `..._TASK_GROUP` | `HOL` / `default` | session image bindings and scratch sessions start on / default heap task group |
-| `..._FIELD_FROM_IMPORTS` | false | start on the image the server's header parse suggests for the file's dotted imports (`suggested_field`: the largest distribution image named) instead of `..._FIELD`; an image the server lacks is built on first use, so prebuild the big ones |
+| `..._FIELD_FROM_IMPORTS` | false | start on the image the server's header parse suggests for the file's dotted imports (`suggested_field`: the largest distribution image named) instead of `..._FIELD`; an image the server lacks fails the open until it is built: prebuild the big ones |
 | `..._HTTP_TIMEOUT` | 600 | httpx timeout (s) |
 | `..._LOAD_TIMEOUT` | 30 | load_document sync budget (s); see `still_running` above |
 | `..._ATTEMPT_TIMEOUT` | 180 | per-candidate/run_code budget (s) |

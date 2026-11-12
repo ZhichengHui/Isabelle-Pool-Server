@@ -66,12 +66,15 @@ object Server_Utils {
       case false => error(s"Failed to stop server ${server_info.name}.")
     }
 
-  /** Session start builds a session image that is missing or not up to date, inside the
-   *  request (Session_Start runs Build.build). ISABELLE_SESSION_START_BUILD=false forbids that:
-   *  such a build can take minutes and bypasses the server's build gates. */
+  /** Session start does NOT build a session image that is missing or not up to date: it fails
+   *  and names the image (check_image_current). A build inside the request can take minutes,
+   *  bypasses the server's build gates, and runs beside a user's own `isabelle build` on the
+   *  same HOME, where both write the same heap and log database (SQLITE_READONLY_DBMOVED,
+   *  primary-key conflicts, a damaged build record). ISABELLE_SESSION_START_BUILD=true
+   *  restores the old behaviour (Session_Start runs Build.build). */
   private val session_start_build: Boolean =
-    !sys.env.get("ISABELLE_SESSION_START_BUILD").map(_.trim.toLowerCase).exists(
-      Set("0", "false", "no", "off"))
+    sys.env.get("ISABELLE_SESSION_START_BUILD").map(_.trim.toLowerCase).exists(
+      Set("1", "true", "yes", "on"))
 
   /** Fail unless the image of `session` is up to date: the check Build.build_logic makes
    *  (no_build = true), with the options and dirs Session_Start would use. */
