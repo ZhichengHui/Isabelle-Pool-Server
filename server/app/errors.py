@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import re
+from typing import Optional
+
 
 class SessionError(Exception):
 
@@ -45,6 +48,29 @@ class HeaderFailed(SessionError):
 
 class SessionStartError(SessionError):
     pass
+
+
+class ImageNotCurrent(SessionError):
+    """Session start found its session image missing or not up to date and does not build it
+    (ISABELLE_SESSION_START_BUILD=false, the default): the client's state, not a server
+    failure. 409; the text names the image and the command that builds it."""
+
+
+_IMAGE_NOT_CURRENT_RE = re.compile(r"Session image \S+ is missing or not up to date[^\n]*")
+
+
+def image_not_current_text(message: str) -> Optional[str]:
+    """The "Session image X is missing or not up to date ..." sentence of a session-start
+    failure message, or None when the failure is something else."""
+    m = _IMAGE_NOT_CURRENT_RE.search(message or "")
+    return m.group(0) if m and "forbids building" in m.group(0) else None
+
+
+def raise_if_image_not_current(exc: BaseException) -> None:
+    """Raise ImageNotCurrent when `exc` is a session start that refused to build its image."""
+    text = image_not_current_text(str(exc))
+    if text:
+        raise ImageNotCurrent(text) from None
 
 
 class GatewayUnavailable(SessionError):

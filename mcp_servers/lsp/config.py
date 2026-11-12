@@ -17,7 +17,7 @@ class Config:
     # "HOL-Computational_Algebra.Computational_Algebra" then starts on that
     # image (seconds) rather than loading its theories from source into the
     # HOL image (minutes; isabelle_open used to time out). An image the server
-    # does not have is built on first use, inside the acquire: prebuild the
+    # does not have fails the acquire (build it first: isabelle_build_heap); prebuild the
     # big ones (`deploy/setup.sh --build-heaps`). Opt-in.
     FIELD_FROM_IMPORTS: bool = env_bool(_P, "FIELD_FROM_IMPORTS", False)
     DEFAULT_TASK_GROUP: str = env_str(_P, "TASK_GROUP", "default")

@@ -121,9 +121,8 @@ def suggested_field(imports: List[str]) -> Optional[str]:
     distribution images named (`_FIELD_ORDER`), else the first dotted import's
     session (`HOL-Cardinals.Cardinals` → `HOL-Cardinals`). None for plain
     imports (Main, Complex_Main). A path import is not a session name and
-    never counts. A session started on the result builds the image when the
-    server does not have it (server_utils.scala, Session_Build), inside the
-    create budget: prebuild the big ones."""
+    never counts. A session started on the result needs that image built: it fails when the
+    server does not have it (server_utils.scala, Session_Build): prebuild the big ones."""
     sessions: List[str] = []
     for name in imports:
         m = _QUALIFIED_IMPORT_RE.match(name)

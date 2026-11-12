@@ -18,6 +18,7 @@ from server.app.core.logging import get_logger, reset_logging_context, set_loggi
 from server.app.errors import (
     GatewayUnavailable,
     HeaderFailed,
+    ImageNotCurrent,
     ImportsNotCovered,
     MemoryPressure,
     PoolExhausted,
@@ -161,6 +162,14 @@ async def handle_gateway_unavailable(request: Request, exc: GatewayUnavailable):
 async def handle_session_start_error(request: Request, exc: SessionStartError):
     logger.error("session startup failed on %s: %s", request.url.path, exc)
     return JSONResponse(status_code=500, content={"detail": str(exc) or "Session start failed"})
+
+
+@app.exception_handler(ImageNotCurrent)
+async def handle_image_not_current(request: Request, exc: ImageNotCurrent):
+    """409: the session image is missing or outdated and session start does not build it."""
+    logger.warning("session image not current on %s: %s", request.url.path, exc)
+    return JSONResponse(
+        status_code=409, content={"detail": str(exc), "error": "image_not_current"})
 
 
 @app.exception_handler(SessionLeaseError)
