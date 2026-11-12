@@ -6,7 +6,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 
 from server.app.core.config import Memory
-from server.app.core.input_guards import reject_code_execution
+from server.app.core.input_guards import reject_code_execution, validate_master_dir
 
 
 class FillSorriesRequest(BaseModel):  # pylint: disable=too-few-public-methods
@@ -36,11 +36,19 @@ class FillSorriesRequest(BaseModel):  # pylint: disable=too-few-public-methods
     load_timeout: float = Field(
         default=120.0, ge=1.0, description="Budget for loading/verifying the text."
     )
+    master_dir: Optional[str] = Field(
+        default=None,
+        description="document mode: absolute directory of the file the text comes from "
+        "(bare-name imports resolve against it; see DocumentLoadRequest.master_dir).",
+    )
     provers: Optional[str] = Field(
         default=None,
         pattern=r"^[a-z0-9_]+( [a-z0-9_]+)*$",
         description="Optional space-separated prover names (Isabelle default when omitted).",
     )
+
+    check_master_dir = field_validator("master_dir")(
+        classmethod(lambda cls, v: validate_master_dir(v)))
 
     @field_validator("text")
     @classmethod

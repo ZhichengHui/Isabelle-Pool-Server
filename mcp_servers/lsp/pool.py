@@ -40,6 +40,9 @@ from ..common import (  # noqa: F401  (is_not_found re-exported)
 )
 from . import lease_renewal
 from .config import Config
+from .sibling_imports import (  # noqa: F401  (re-exported)
+    master_dir_of, resolve_sibling_imports, sibling_imports as _sibling_imports,
+)
 
 
 def canonical_path(file_path: str) -> str:
@@ -47,7 +50,7 @@ def canonical_path(file_path: str) -> str:
 
 
 async def header_fields(
-    client: PoolAsyncClient, text: str,
+    client: PoolAsyncClient, text: str, master_dir: Optional[str] = None,
 ) -> Tuple[List[str], Optional[str]]:
     """(imports, suggested_field) of a full .thy source's header.
 
@@ -58,7 +61,22 @@ async def header_fields(
     headers, and picks the session image for them, exactly as the server it
     talks to does (`suggested_field`: the largest distribution image named)."""
     resp = await client.parse_theory_header(text)
-    return list(resp.get("imports") or []), resp.get("suggested_field") or None
+    raw = list(resp.get("imports") or [])
+    imports = resolve_sibling_imports(raw, master_dir)
+    suggested = resp.get("suggested_field") or None
+    if imports != raw:
+        # The siblings' own imports decide the image too: a sibling importing
+        # "S.T" needs the image of S, or the wrapper loads S's theories from
+        # source on the default image (minutes to hours). Only the field choice
+        # sees them; the wrapper still imports just the siblings.
+        try:
+            deeper = await _sibling_imports(client, imports, set())
+            if deeper:
+                merged = await client.parse_theory_header(header_text(raw + deeper))
+                suggested = merged.get("suggested_field") or suggested
+        except Exception:  # noqa: BLE001  (the field is a hint; the header's own stands)
+            pass
+    return imports, suggested
 
 
 async def header_imports(client: PoolAsyncClient, text: str) -> List[str]:
@@ -156,7 +174,7 @@ class LspPool(GymClientMixin):
         except OSError:
             text = None
         if text is not None:
-            imports, suggested = await header_fields(c, text)
+            imports, suggested = await header_fields(c, text, master_dir_of(canon))
             imports = imports or None
         # Acquire (not create): sessions released by other bindings with the
         # same dependency key (task_group + heap / imports, default field)
@@ -279,6 +297,7 @@ class LspPool(GymClientMixin):
                 result = await c.load_document(
                     binding.session_id, text, report=True,
                     timeout=Config.LOAD_TIMEOUT, lease_id=binding.lease_id,
+                    master_dir=master_dir_of(canon),
                 )
             except httpx.HTTPStatusError as e:
                 if not is_not_found(e):
@@ -293,6 +312,7 @@ class LspPool(GymClientMixin):
                 result = await c.load_document(
                     binding.session_id, text, report=True,
                     timeout=Config.LOAD_TIMEOUT, lease_id=binding.lease_id,
+                    master_dir=master_dir_of(canon),
                 )
             binding.cached_text = text
             binding.last_report = result.get("report") or {}

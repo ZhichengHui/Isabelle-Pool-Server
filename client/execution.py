@@ -108,6 +108,7 @@ class ExecutionMixin(ClientBase):
         timeout: float | None = None,
         report: bool = False,
         lease_id: str | None = None,
+        master_dir: str | None = None,
     ) -> dict[str, Any]:
         """Replace the session's whole document with ``text`` (file-sync primitive).
 
@@ -122,14 +123,21 @@ class ExecutionMixin(ClientBase):
         state stays for inspection). The report is also retained server-side and
         queryable via :meth:`get_last_report`.
 
+        ``master_dir`` (absolute path, optional) is the directory of the file the
+        text comes from: the server resolves the text's bare-name imports against
+        it, as ``isabelle build`` does (the server must see the same disk).
+
         Returns ``{success, theory, output, error, execution_time, report}``.
         """
         budget = timeout if timeout is not None else self.timeout
+        body = {"text": text, "thy_name": thy_name, "imports": imports,
+                "timeout": budget, "report": report}
+        if master_dir:
+            body["master_dir"] = master_dir
         response = await self._request(
             "PUT",
             f"{BASE_URL}/{session_id}/document",
-            json_body={"text": text, "thy_name": thy_name, "imports": imports,
-                       "timeout": budget, "report": report},
+            json_body=body,
             headers=self._lease_headers(lease_id),
             timeout=(budget + 60.0) if budget is not None else None,
         )
@@ -232,6 +240,7 @@ class ExecutionMixin(ClientBase):
         provers: str | None = None,
         load_timeout: float = 120.0,
         lease_id: str | None = None,
+        master_dir: str | None = None,
     ) -> dict[str, Any]:
         """Start the server-side sledgehammer job on every ``sorry`` of ``text``
         (``POST …/fill_sorries``, 202). Returns the initial job state: ``status``,
@@ -246,6 +255,8 @@ class ExecutionMixin(ClientBase):
         }
         if provers:
             body["provers"] = provers
+        if master_dir:
+            body["master_dir"] = master_dir
         response = await self._request(
             "POST",
             f"{BASE_URL}/{session_id}/fill_sorries",

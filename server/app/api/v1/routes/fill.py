@@ -43,8 +43,9 @@ async def fill_sorries(
 
     def call() -> Any:
         if request.mode == "document":
+            extra = {"master_dir": request.master_dir} if request.master_dir else {}
             return session.load_document(
-                request.text, None, None, request.load_timeout, True
+                request.text, None, None, request.load_timeout, True, **extra
             )
         return session.verify_chunk(request.text, request.load_timeout)
 

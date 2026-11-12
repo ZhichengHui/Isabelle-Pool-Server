@@ -27,6 +27,7 @@ from .internal_models import (
     SessionStatus,
     SmallStepExecuteResult,
 )
+from .report_parsing import interpret_report
 from .session_reset import reset_for_load
 from .theory_chunks import preview_text
 from .theory_parsing import parse_theory_header
@@ -69,6 +70,8 @@ class _Isabelle_Session:
         # Gates the INCREMENTAL sync fast path: a load can diff against the
         # live node only if a previous full-file load established the base.
         self._loaded_text: Optional[str] = None
+        # Directory the entered theory's document comes from (None: unknown).
+        self._master_dir: Optional[str] = None
         # Free-form observability label (e.g. the file path a file-synced
         # client is mirroring). Set at creation; no pooling behavior change.
         self.label: Optional[str] = None
@@ -342,14 +345,25 @@ class _Isabelle_Session:
         return f"theory {name} imports {' '.join(q(n) for n in names)} begin"
 
     def enter_thy(self, thy_name: str, timeout: Optional[float] = None,
-                  imports: Optional[List[str]] = None):
+                  imports: Optional[List[str]] = None,
+                  master_dir: Optional[str] = None):
         """Enter a theory node. If ``imports`` is given, the server also begins the theory
         by processing a correctly-quoted ``theory ... begin`` header — so the client never
         hand-builds Isar headers and verify_chunk/step work immediately. If ``imports`` is
-        omitted, behaviour is unchanged (caller supplies the header itself, e.g. corpus .thy)."""
+        omitted, behaviour is unchanged (caller supplies the header itself, e.g. corpus .thy).
+
+        ``master_dir`` is the directory the document comes from: the backend resolves the
+        document's bare-name imports against it (`isabelle build`'s rule) and reads
+        them from disk. Without it they resolve in the server's own directory."""
         self.entered_thy = thy_name
-        logger.info("entering theory theory_name=%s imports=%s", thy_name, imports)
-        result = self._call_backend(lambda: self.backend.raw.enter_thy(thy_name), timeout=timeout)
+        self._master_dir = master_dir
+        logger.info("entering theory theory_name=%s imports=%s master_dir=%s",
+                    thy_name, imports, master_dir)
+        if master_dir:
+            result = self._call_backend(
+                lambda: self.backend.raw.enter_thy_in(thy_name, master_dir), timeout=timeout)
+        else:
+            result = self._call_backend(lambda: self.backend.raw.enter_thy(thy_name), timeout=timeout)
         if imports:
             header = self._build_theory_header(thy_name, imports)
             hdr = self.step(header, timeout=timeout)
@@ -364,6 +378,7 @@ class _Isabelle_Session:
         self.checkpoints.clear()
         self.verified_theories.clear()
         self.entered_thy = ""
+        self._master_dir = None
         self.last_chunk_report = None
         self._loaded_text = None
 
@@ -380,32 +395,12 @@ class _Isabelle_Session:
         """Parse a backend chunk-status report JSON (verify_chunk /
         step_chunk_report / sync_document share the shape), store it in
         ``last_chunk_report``, and derive (report, success, error_message)."""
-        try:
-            report = json.loads(report_json) if report_json else {}
-        except (ValueError, TypeError):
-            report = {"timed_out": False, "commands": [],
-                      "error": "unparseable backend report"}
+        report, success, error_message = interpret_report(report_json)
         self.last_chunk_report = {
             "report": report,
             "execution_time": execution_time,
             "timestamp": start_time,
         }
-        commands = report.get("commands", []) or []
-        success = bool(report.get("success", False))
-        error_message = report.get("error")
-        if not error_message and not success:
-            if report.get("timed_out"):
-                stuck = next((c.get("line") for c in commands if c.get("status") == "running"), None)
-                error_message = f"timed out (still running at line {stuck})" if stuck else "timed out"
-            else:
-                for c in commands:
-                    msg = next(
-                        (m.get("text") for m in (c.get("messages") or []) if m.get("sev") == "error"),
-                        None,
-                    )
-                    if msg:
-                        error_message = f"line {c.get('line')}: {msg}"
-                        break
         return report, success, error_message
 
     def _step_with_report(self, text: str, timeout: float):
@@ -476,7 +471,8 @@ class _Isabelle_Session:
         return success, error_message, ""
 
     def _sync_candidate(self, text: str, thy_name: Optional[str],
-                        imports: Optional[List[str]], report: bool) -> bool:
+                        imports: Optional[List[str]], report: bool,
+                        master_dir: Optional[str] = None) -> bool:
         """True when ``load_document`` may attempt the incremental sync path:
         report mode on a full-file load (imports mode builds the header
         server-side and keeps the reset path), a previous full-file load left
@@ -486,6 +482,8 @@ class _Isabelle_Session:
             return False
         if self._loaded_text is None or not self.entered_thy:
             return False
+        if (master_dir or None) != (self._master_dir or None):
+            return False  # imports resolve differently: re-enter the theory
         name = thy_name
         if not name:
             name, _ = parse_theory_header(text)
@@ -494,7 +492,8 @@ class _Isabelle_Session:
     def load_document(self, text: str, thy_name: Optional[str] = None,
                       imports: Optional[List[str]] = None,
                       timeout: float = Timeouts.COMMAND_DEFAULT,
-                      report: bool = False) -> SmallStepExecuteResult:
+                      report: bool = False,
+                      master_dir: Optional[str] = None) -> SmallStepExecuteResult:
         """Replace the session's whole document with ``text`` (the file-sync primitive).
 
         Two paths. The RESET path (always used for a first load, for
@@ -536,7 +535,7 @@ class _Isabelle_Session:
                 )
                 sync_used = False
                 try:
-                    if self._sync_candidate(text, thy_name, imports, report):
+                    if self._sync_candidate(text, thy_name, imports, report, master_dir):
                         sync_result = self._sync_document(text, timeout)
                         if sync_result is not None:
                             success, error_message, output = sync_result
@@ -558,7 +557,7 @@ class _Isabelle_Session:
                                 execution_time=time.time() - start_time,
                             )
 
-                        self.enter_thy(name, timeout=timeout, imports=imports)
+                        self.enter_thy(name, timeout=timeout, imports=imports, master_dir=master_dir)
                         if report:
                             success, error_message, output = self._step_with_report(text, timeout)
                         else:

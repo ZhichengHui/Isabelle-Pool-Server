@@ -75,7 +75,7 @@ class Repl_Session(session_manager: Session_Manager, initial_thys: List[String] 
     val thy_info = current_thy_info.getOrElse(
       error("Cannot retrieve current node name if there is no current theory.")
     )
-    Document_Utils.thy_node_name(thy_info.name)
+    Document_Utils.thy_node_name(thy_info.name, thy_info.master_dir)
   }
 
   private def update_session_with_edits(
@@ -167,7 +167,7 @@ class Repl_Session(session_manager: Session_Manager, initial_thys: List[String] 
     }
   }
 
-  def enter_thy(thy_name: String): Unit = {
+  def enter_thy(thy_name: String, master_dir: String = ""): Unit = {
     if (current_thy_info.isDefined) set_current_required(false)
     val thy_info = session_thys.getOrElse(
       thy_name, {
@@ -176,6 +176,7 @@ class Repl_Session(session_manager: Session_Manager, initial_thys: List[String] 
         thy_info
       }
     )
+    if (master_dir.nonEmpty) thy_info.master_dir = master_dir
     current_thy_info = Some(thy_info)
     set_current_required(true)
   }
@@ -443,7 +444,7 @@ class Repl_Session(session_manager: Session_Manager, initial_thys: List[String] 
   def send_vector_edit(isar_strings: List[String]): Unit =
     vector_current_duplicates.foreach { thy_infos =>
       thy_infos.zip(isar_strings).foreach { case (thy_info, isar_string) =>
-        send_edit(isar_string, node = Some(Document_Utils.thy_node_name(thy_info.name)))
+        send_edit(isar_string, node = Some(Document_Utils.thy_node_name(thy_info.name, thy_info.master_dir)))
       }
     }
 
@@ -500,7 +501,7 @@ class Repl_Session(session_manager: Session_Manager, initial_thys: List[String] 
     else if (!session_thys.values.forall(_.has_saved_state(state_id))) false
     else {
       session_thys.foreach { case (_, thy_info) =>
-        val thy_node_name = Document_Utils.thy_node_name(thy_info.name)
+        val thy_node_name = Document_Utils.thy_node_name(thy_info.name, thy_info.master_dir)
         thy_info.restore_state(state_id).foreach { text_edits_required =>
           val edits = List(Edit_Utils.edit_from_text_edits(text_edits_required))
           update_session_with_edits(edits, node_name = Some(thy_node_name))

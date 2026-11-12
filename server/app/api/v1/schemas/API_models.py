@@ -5,6 +5,7 @@ from server.app.core.config import Timeouts
 from server.app.core.diagnostic_guard import validate_diagnostic_command
 from server.app.core.input_guards import (
     reject_code_execution,
+    validate_master_dir,
     validate_import_name,
     validate_import_names,
     validate_project_path,
@@ -156,8 +157,20 @@ class DocumentLoadRequest(BaseModel):
                     "still discarded to cancel runaway commands.",
     )
 
+    master_dir: Optional[str] = Field(
+        default=None,
+        description="Absolute directory of the file the text comes from (its Isabelle "
+                    "master directory). Bare-name imports of the text resolve against "
+                    "it, as in `isabelle build`; the server reads those theories from "
+                    "its disk. If omitted, bare names resolve in the server's own "
+                    "directory (the old behaviour).",
+    )
+
     check_imports = field_validator("imports")(classmethod(_opt_imports))
     check_thy_name = field_validator("thy_name")(classmethod(_opt_theory_name))
+
+    check_master_dir = field_validator("master_dir")(
+        classmethod(lambda cls, v: validate_master_dir(v)))
 
     @field_validator("text")
     @classmethod

@@ -8,6 +8,9 @@ import scala.collection.mutable
  *  saved states behind checkpoints. Shared infrastructure used by
  *  [[Repl_Session]] for both workflows. */
 class Thy_Info(val name: String, status: Option[Thy_Status] = None) {
+  /** Directory the document comes from ("" = unknown): bare-name imports resolve
+   *  against it (see Edit_Utils). */
+  var master_dir: String = ""
   private var current_status: Thy_Status = status.getOrElse(Thy_Status())
   private val saved_states: mutable.Map[EnvStateID, Thy_Status] = mutable.Map.empty
 

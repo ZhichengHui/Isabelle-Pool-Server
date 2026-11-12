@@ -75,6 +75,7 @@ class FillFakeClient(FakeClient):
         provers=None,
         load_timeout=120.0,
         lease_id=None,
+        master_dir=None,
     ):
         if self.submit_error is not None:
             raise self.submit_error

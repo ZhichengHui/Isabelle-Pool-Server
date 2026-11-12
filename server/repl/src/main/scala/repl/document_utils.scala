@@ -21,9 +21,18 @@ case class Chunk_Report(success: Boolean, fields: JSON.Object.T, timed_out: Bool
 }
 
 object Document_Utils {
-  def thy_node_name(thy_name: String): Document.Node.Name = {
-    val qualifier = Sessions.DRAFT
-    Document.Node.Name(s"$qualifier.$thy_name", theory = thy_name)
+  /** The node of the entered theory. With a master directory (the directory of the file the
+   *  document comes from) the node is that file's path: PIDE resolves the document's own
+   *  imports against the node's directory (Command.blobs_info, Resources.check_thy), so a
+   *  bare `imports A` then names `master_dir/A.thy`, as in `isabelle build`. Without one the
+   *  node is a Draft name with no directory (the former behaviour). */
+  def thy_node_name(thy_name: String, master_dir: String = ""): Document.Node.Name = {
+    if (master_dir.nonEmpty)
+      Document.Node.Name(master_dir.stripSuffix("/") + "/" + thy_name + ".thy", theory = thy_name)
+    else {
+      val qualifier = Sessions.DRAFT
+      Document.Node.Name(s"$qualifier.$thy_name", theory = thy_name)
+    }
   }
 
   /** Fresh snapshot of the node: waits only until the session is STABLE (no pending
