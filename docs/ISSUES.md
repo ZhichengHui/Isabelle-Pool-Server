@@ -1033,6 +1033,39 @@ keeps the header order too.
 
 ---
 
+### Bug 27: A Bare Import of a Sibling Theory Did Not Resolve Like `isabelle build` — RESOLVED
+
+**Severity:** High (files of a multi-theory session cannot be opened; found on the PGR server, 2026-11-12)
+**Status:** ✅ Resolved 2026-11-12.
+
+**Symptom:** a session's ROOT lists theories `A` and `B`, `B` has `imports A`. `isabelle build`
+passes; `isabelle_open` on `B.thy` fails with `http_500` / "Cannot load theory file": the server
+looks for `A` in `server/repl/thys/`.
+
+**Cause:** two places resolved the bare name against the server's own directory. (1) The MCP sent
+only the import names to `acquire`, so the wrapper theory (in `server/repl/thys/`) imported `A`
+there. (2) The document's node was `Draft.B`, a name with no directory: `import_all_theories`
+called `use_theories` with the default master directory, and PIDE resolves a theory command's
+imports against the node's directory (`Command.blobs_info`), so it reported `Bad theory import`.
+
+**Fix:** the LSP MCP names a same-directory sibling by its absolute path in the wrapper's imports
+(`resolve_sibling_imports`) and sends `master_dir` (the file's directory) with `load_document` and
+`fill_sorries` (optional field, validated by `validate_master_dir`). The server passes it to
+`Backend.enter_thy_in`; `Document_Utils.thy_node_name` then names the node `master_dir/Thy.thy`,
+and `import_all_theories` / `dependencies_edit` use it. The siblings' own imports are also read
+for the session image (field), so `BVSmt_SmtSize`'s `BVSmt_Smt.…` import selects the
+`BVSmt_Smt` image. Qualified imports and the field rule are unchanged. Limit: the MCP and the
+server must see the same disk.
+
+**Verified:** `tests/test_mcp_lsp_master_dir.py`, `tests/test_master_dir_server.py`; live
+`tests/test_master_dir_live.py`; `BVSmt_SmtBound.thy` and `QFUF_Proof.thy` on PGR.
+
+**Related, not fixed:** session start builds a missing or outdated image inside the request
+(`ISABELLE_SESSION_START_BUILD`, default true), which can run beside a user's own `isabelle build`
+on the same HOME and corrupt the build log database. Setting it to `false` makes the start only check.
+
+---
+
 ### [To-do]Issue 1: How Isabelle do parallel
 When have parallel "have x" statements, can we do this in step. And how do we retrive information when one line is stucked in loop. That is, we need error retrieval for a proof chunk, the server should not just return a timeout error, it should tell, when we build the MCP server, the agent what part of that proof chunk just went wrong.
 
