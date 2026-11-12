@@ -30,7 +30,7 @@ from .internal_models import (
 from .report_parsing import interpret_report
 from .session_reset import reset_for_load
 from .theory_chunks import preview_text
-from .theory_parsing import parse_theory_header
+from .theory_parsing import build_theory_header, parse_theory_header
 
 logger = get_logger(__name__)
 
@@ -334,15 +334,7 @@ class _Isabelle_Session:
         finally:
             self._release_request()
 
-    @staticmethod
-    def _build_theory_header(name: str, imports: List[str]) -> str:
-        """Build a valid Isar `theory <name> imports ... begin` header. Session-qualified
-        imports (HOL-Number_Theory.Number_Theory) contain '-'/'.' and MUST be quoted, else
-        Isabelle splits them; the quoting lives here so every client gets it right."""
-        def q(i: str) -> str:
-            return i if re.fullmatch(r"[A-Za-z][\w']*", i) else f'"{i}"'
-        names = [n for n in (imports or []) if n] or ["Main"]
-        return f"theory {name} imports {' '.join(q(n) for n in names)} begin"
+    _build_theory_header = staticmethod(build_theory_header)
 
     def enter_thy(self, thy_name: str, timeout: Optional[float] = None,
                   imports: Optional[List[str]] = None,
@@ -403,7 +395,7 @@ class _Isabelle_Session:
         }
         return report, success, error_message
 
-    def _step_with_report(self, text: str, timeout: float):
+    def _step_with_report(self, text: str, timeout: float, keep_on_timeout: bool = False):
         """Issue ``text`` as one edit and return (success, error, output) together
         with a per-command status report, WITHOUT rolling back ordinary failures
         (backend ``step_chunk_report``; the dual of verify_chunk's transactional
@@ -414,8 +406,10 @@ class _Isabelle_Session:
         start_time = time.time()
         # Backend bounds the work at budget_ms; give the Python call extra grace
         # so the Python side never times out before the backend returns its report.
+        step = (self.backend.raw.step_chunk_report_kept if keep_on_timeout
+                else self.backend.raw.step_chunk_report)
         report_json = self._call_backend(
-            lambda: self.backend.raw.step_chunk_report(text, budget_ms, probe_state),
+            lambda: step(text, budget_ms, probe_state),
             timeout=timeout + Timeouts.COMMAND_DEFAULT,
         )
         execution_time = time.time() - start_time
@@ -492,8 +486,8 @@ class _Isabelle_Session:
     def load_document(self, text: str, thy_name: Optional[str] = None,
                       imports: Optional[List[str]] = None,
                       timeout: float = Timeouts.COMMAND_DEFAULT,
-                      report: bool = False,
-                      master_dir: Optional[str] = None) -> SmallStepExecuteResult:
+                      report: bool = False, master_dir: Optional[str] = None,
+                      keep_on_timeout: bool = False) -> SmallStepExecuteResult:
         """Replace the session's whole document with ``text`` (the file-sync primitive).
 
         Two paths. The RESET path (always used for a first load, for
@@ -559,7 +553,8 @@ class _Isabelle_Session:
 
                         self.enter_thy(name, timeout=timeout, imports=imports, master_dir=master_dir)
                         if report:
-                            success, error_message, output = self._step_with_report(text, timeout)
+                            success, error_message, output = self._step_with_report(
+                                text, timeout, keep_on_timeout)
                         else:
                             result = self.step(text, timeout=timeout)
                             success = is_syntax_successful(result)

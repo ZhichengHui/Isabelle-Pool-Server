@@ -23,6 +23,7 @@ import httpx
 from ..common import dump_json as _j
 from ..common import translate_http_error
 from .config import Config
+from .reminders import add_reminder
 from .pool import attempt_prefix, field_for, header_fields, header_text, master_dir_of
 from .verdict import candidate_verdict
 
@@ -450,6 +451,7 @@ async def isabelle_multi_attempt(
                     "timed_out": rep.get("timed_out"),
                     "failed": bad,
                 }
+                add_reminder(result, rep.get("timed_out"), budget, "this candidate")
                 if prefix_used_sorry:
                     result["prefix_used_sorry"] = True
                 if prefix_bad:
@@ -517,14 +519,16 @@ async def isabelle_run_code(
             for cmd in rep.get("commands", []) or []
             if cmd.get("status") in ("failed", "running")
         ]
-        return _j({
+        out = {
             "success": result.get("success"),
             "output": result.get("output"),
             "error": result.get("error"),
             "proof_open": rep.get("proof_open"),
             "used_sorry": rep.get("used_sorry"),
             "failed": bad,
-        })
+        }
+        add_reminder(out, rep.get("timed_out"), budget, "this snippet")
+        return _j(out)
     except (
         httpx.HTTPStatusError
     ) as e:  # owner=None: single-agent server (see multi_attempt)

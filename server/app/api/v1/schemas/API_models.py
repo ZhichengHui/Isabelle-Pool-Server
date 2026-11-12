@@ -159,11 +159,15 @@ class DocumentLoadRequest(BaseModel):
 
     master_dir: Optional[str] = Field(
         default=None,
-        description="Absolute directory of the file the text comes from (its Isabelle "
-                    "master directory). Bare-name imports of the text resolve against "
-                    "it, as in `isabelle build`; the server reads those theories from "
-                    "its disk. If omitted, bare names resolve in the server's own "
-                    "directory (the old behaviour).",
+        description="Absolute directory of the file the text comes from: its bare-name "
+                    "imports resolve against it, as in `isabelle build` (read from the "
+                    "server's disk). Omitted: they resolve in the server's own directory.",
+    )
+    keep_on_timeout: bool = Field(
+        default=False,
+        description="With report: keep the edit when the first load outlives its timeout "
+                    "(commands go on running, the next load is incremental) instead of "
+                    "discarding it, which restarted the load on every call.",
     )
 
     check_imports = field_validator("imports")(classmethod(_opt_imports))

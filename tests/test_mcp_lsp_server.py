@@ -114,7 +114,8 @@ class FakeClient:
         return {"theory_name": name, "imports": imports, "suggested_field": suggested_field(imports)}
 
     async def load_document(self, session_id, text, thy_name=None, imports=None,
-                            timeout=None, report=False, lease_id=None, master_dir=None):
+                            timeout=None, report=False, lease_id=None, master_dir=None,
+                            keep_on_timeout=False):
         if self.fail_next_load_404:
             self.fail_next_load_404 = False
             raise httpx.HTTPStatusError(
@@ -123,7 +124,8 @@ class FakeClient:
                 response=httpx.Response(404),
             )
         self.loads.append({"session_id": session_id, "text": text, "report": report,
-                           "master_dir": master_dir})
+                           "master_dir": master_dir,
+                           "keep_on_timeout": keep_on_timeout})
         self.dirty.add(session_id)
         if self.next_reports:
             return {"success": True, "report": self.next_reports.pop(0)}

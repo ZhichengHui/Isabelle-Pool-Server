@@ -15,6 +15,7 @@ from mcp.server.fastmcp import FastMCP
 
 from ..common import ToolNames, dump_json, make_guard
 from .config import Config
+from .reminders import reminder
 from .pool import LspPool
 from . import scratch_spare
 
@@ -126,6 +127,13 @@ def _attach_still_running(out: Any, file_path: Any) -> Any:
         return out
     if not isinstance(result, dict):
         return out
+    for cmd in running:
+        r = reminder(cmd["running_for_s"], f"the command at line {cmd['line']} ({cmd['kind']})")
+        if r:
+            cmd["reminder"] = r["message"]
+    shown = [c for c in running if "reminder" in c]
+    if shown:  # the longest-running command's reminder, also at the top of the result
+        result["reminder"] = max(shown, key=lambda c: c["running_for_s"])["reminder"]
     result["still_running"] = running
     result["still_running_note"] = (
         f"The last check of this file stopped after {Config.LOAD_TIMEOUT:.0f} s because these "

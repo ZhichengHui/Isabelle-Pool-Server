@@ -116,6 +116,16 @@ _FIELD_ORDER = (
 _QUALIFIED_IMPORT_RE = re.compile(r"^([A-Za-z0-9_-]+)\.[^/]+$")
 
 
+def build_theory_header(name: str, imports: List[str]) -> str:
+    """Build a valid Isar `theory <name> imports ... begin` header. Session-qualified
+    imports (HOL-Number_Theory.Number_Theory) contain '-'/'.' and MUST be quoted, else
+    Isabelle splits them; the quoting lives here so every client gets it right."""
+    def q(i: str) -> str:
+        return i if re.fullmatch(r"[A-Za-z][\w']*", i) else f'"{i}"'
+    names = [n for n in (imports or []) if n] or ["Main"]
+    return f"theory {name} imports {' '.join(q(n) for n in names)} begin"
+
+
 def suggested_field(imports: List[str]) -> Optional[str]:
     """The session image a header's dotted imports imply: the largest of the
     distribution images named (`_FIELD_ORDER`), else the first dotted import's

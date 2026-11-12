@@ -38,6 +38,11 @@ trait Backend_File_Ops { this: ReplBackend =>
    *  - On BUDGET TIMEOUT the chunk IS discarded (discard_last_edit) to cancel
    *    the runaway command — leaving a looping `metis` churning is never what a
    *    caller wants. The report's `timed_out`/`running` line names the loop.
+   *    With `keep_on_timeout` (step_chunk_report_kept, the file-binding load of the LSP
+   *    MCP) the chunk is KEPT instead, exactly as sync_document keeps its replace: the
+   *    commands go on running, the header stays processed, and the next load of the same
+   *    file takes the incremental path. Discarding a first load that needs more than
+   *    the budget made it start over on every call and never finish.
    *  - `proof_open`/`pending_qed` are only probed when the chunk succeeded AND
    *    `probe_state` is true. Callers pass probe_state=false when the text ends
    *    with theory `end`: a probe appended past `end` never executes, so the
@@ -48,7 +53,16 @@ trait Backend_File_Ops { this: ReplBackend =>
    *    is open (and probing past `end` would hang). The `probe_state` flag is
    *    kept as belt-and-braces for reports generated differently.
    */
-  def step_chunk_report(isar_string: String, wall_budget_ms: Long, probe_state: Boolean): String = {
+  def step_chunk_report(isar_string: String, wall_budget_ms: Long, probe_state: Boolean): String =
+    step_chunk_report_impl(isar_string, wall_budget_ms, probe_state, keep_on_timeout = false)
+
+  /** step_chunk_report that keeps the chunk when the budget expires (see above). */
+  def step_chunk_report_kept(isar_string: String, wall_budget_ms: Long, probe_state: Boolean): String =
+    step_chunk_report_impl(isar_string, wall_budget_ms, probe_state, keep_on_timeout = true)
+
+  private def step_chunk_report_impl(
+      isar_string: String, wall_budget_ms: Long, probe_state: Boolean, keep_on_timeout: Boolean
+  ): String = {
     Repl_Output.reset()
     // Guard on ENTERED (not begun): for a full-file load the theory header is part of
     // the chunk itself, so `current_thy_begun` is still false before this first edit —
@@ -59,7 +73,7 @@ trait Backend_File_Ops { this: ReplBackend =>
       repl_session.send_edit(isar_string)
       val report = repl_session.chunk_status_report(wall_budget_ms)
       val proof_open =
-        if (report.timed_out) { repl_session.discard_last_edit(); false }
+        if (report.timed_out) { if (!keep_on_timeout) repl_session.discard_last_edit(); false }
         else if (!report.success) false
         else if (repl_session.current_thy_ended) false  // trailing `end`: theory closed
         else probe_state && in_proof()
