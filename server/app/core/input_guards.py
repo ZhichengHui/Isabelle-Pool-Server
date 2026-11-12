@@ -202,6 +202,25 @@ def validate_import_name(value: str) -> str:
     return value
 
 
+MASTER_DIR_RE = re.compile(r"/[A-Za-z0-9_.\-/+@=,]*")
+
+
+def validate_master_dir(value: Optional[str]) -> Optional[str]:
+    """The directory a document comes from (its Isabelle master directory): an
+    absolute path of plain characters without `..` (None passes)."""
+    if value is None:
+        return None
+    if (
+        not isinstance(value, str)
+        or not MASTER_DIR_RE.fullmatch(value)
+        or ".." in value.split("/")
+    ):
+        raise ValueError(
+            f"invalid master_dir {value!r}: an absolute path of plain characters, no '..'"
+        )
+    return value
+
+
 def validate_import_names(values: Iterable[str]) -> list[str]:
     return [validate_import_name(v) for v in values]
 

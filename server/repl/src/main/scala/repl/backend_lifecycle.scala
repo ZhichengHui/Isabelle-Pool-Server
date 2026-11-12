@@ -31,6 +31,16 @@ trait Backend_Lifecycle { this: ReplBackend =>
     }
   }
 
+  /** `enter_thy` for a document that comes from a file in `master_dir`: the document's
+   *  bare-name imports then resolve against that directory (Isabelle's master
+   *  directory rule, as in `isabelle build`) instead of the server's own. */
+  def enter_thy_in(input_thy_name: String, master_dir: String): Repl_Result = build_result {
+    Thy_Parsing.extract_thy_name(input_thy_name) match {
+      case None           => Repl_Output.add_error(s"Invalid theory name: $input_thy_name")
+      case Some(thy_name) => repl_session.enter_thy(thy_name, master_dir)
+    }
+  }
+
   /** Tear down the current Isabelle session and start a fresh one (through the
    *  cache when enabled), PRESERVING this backend's initial theories, field, and
    *  session dirs — load_document resets before every whole-document replace, so

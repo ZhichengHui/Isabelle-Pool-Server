@@ -18,15 +18,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Tuple
+from typing import Optional, Tuple
 
 from .config import Config
-from .pool import FileBinding, LspPool, field_for, header_fields
+from .pool import FileBinding, LspPool, field_for, header_fields, master_dir_of
 
 logger = logging.getLogger(__name__)
 
 
-def ensure(pool: LspPool, key: Tuple, text: str) -> None:
+def ensure(pool: LspPool, key: Tuple, text: str, master_dir: Optional[str] = None) -> None:
     """Start preparing spares for `key` with `text` until min(SCRATCH_SPARE, MAX_PARALLEL) are
     idle or being prepared."""
     want = min(Config.SCRATCH_SPARE, Config.MAX_PARALLEL)
@@ -42,10 +42,12 @@ def ensure(pool: LspPool, key: Tuple, text: str) -> None:
     n = min(want - pending, idle + creatable)
     if n > idle:
         pool._spare_pending[key] = pending + n
-        _spawn(pool, _prepare(pool, key, text, n))
+        _spawn(pool, _prepare(pool, key, text, n, master_dir))
 
 
-async def _prepare(pool: LspPool, key: Tuple, text: str, n: int) -> None:
+async def _prepare(
+    pool: LspPool, key: Tuple, text: str, n: int, master_dir: Optional[str] = None,
+) -> None:
     """Acquire `n` scratch sessions concurrently (the idle ones first, then new ones, which the
     server creates in parallel), load the text into each, and release them only when all are
     done. Released one by one, the next acquire would get back the session just released and
@@ -68,7 +70,8 @@ async def _prepare(pool: LspPool, key: Tuple, text: str, n: int) -> None:
                 try:
                     c = await pool.client()
                     await c.load_document(sid, text, report=True,
-                                          timeout=Config.ATTEMPT_TIMEOUT, lease_id=lease)
+                                          timeout=Config.ATTEMPT_TIMEOUT, lease_id=lease,
+                                          master_dir=master_dir)
                 finally:
                     finish()
                     await all_finished.wait()  # hold the session until every spare is loaded
@@ -101,13 +104,14 @@ def schedule_for_binding(pool: LspPool, binding: FileBinding) -> None:
     async def run() -> None:
         try:
             c = await pool.client()
-            imports, suggested = await header_fields(c, text)
+            master_dir = master_dir_of(binding.file_path)
+            imports, suggested = await header_fields(c, text, master_dir)
             key = pool.scratch_key(binding.task_group, binding.heap_session, imports,
                                    field_for(suggested))
         except Exception as e:  # noqa: BLE001
             logger.info("scratch spare: no key for %s: %s", binding.file_path, e)
             return
-        ensure(pool, key, text)
+        ensure(pool, key, text, master_dir)
 
     _spawn(pool, run())
 

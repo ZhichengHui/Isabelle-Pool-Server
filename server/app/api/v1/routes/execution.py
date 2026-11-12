@@ -161,6 +161,7 @@ async def load_document(
             request.imports,
             request.timeout,
             request.report,
+            **({"master_dir": request.master_dir} if request.master_dir else {}),
         ),
         session,
         session_manager,

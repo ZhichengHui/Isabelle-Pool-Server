@@ -119,10 +119,15 @@ object Edit_Utils {
   private def dependencies_edit(
       session: Headless.Session,
       node_name: Document.Node.Name,
-      thy_header: Thy_Header
+      thy_header: Thy_Header,
+      master_dir: String = ""
   ): Option[Edit] = {
     val imports = thy_header.imports.map { case (s, pos) =>
-      val name = session.resources.import_name(node_name, s)
+      // With a master directory a bare name is the file `master_dir/s.thy`, named as
+      // use_theories (import_all_theories) names it: same qualifier, same theory name.
+      val name =
+        if (master_dir.nonEmpty) session.resources.import_name(Sessions.DRAFT, master_dir, s)
+        else session.resources.import_name(node_name, s)
       (name, pos)
     }
     val illegal_imports =
@@ -158,13 +163,14 @@ object Edit_Utils {
 
   private def import_all_theories(
       session: Headless.Session,
-      all_import_names: List[String]
+      all_import_names: List[String],
+      master_dir: String
   ): Boolean =
     all_import_names.forall { local_import_name =>
       val error_msg = s"Failed to import theory: $local_import_name"
       val import_successful =
         try {
-          val result = session.use_theories(List(local_import_name))
+          val result = session.use_theories(List(local_import_name), master_dir = master_dir)
           if (!result.ok) Repl_Output.add_error(error_msg)
           result.ok
         } catch {
@@ -187,7 +193,8 @@ object Edit_Utils {
       case Some(thy_header) =>
         val all_imports_successful = import_all_theories(
           session,
-          thy_header.imports.map(_._1)
+          thy_header.imports.map(_._1),
+          thy_info.master_dir
         )
         if (!all_imports_successful) return None
 
@@ -206,7 +213,7 @@ object Edit_Utils {
         }
         val emulated_imports_edits = additional_imports_to_emulate.map(emulate_thy_import)
 
-        dependencies_edit(session, node_name, thy_header).map { true_deps_edit =>
+        dependencies_edit(session, node_name, thy_header, thy_info.master_dir).map { true_deps_edit =>
           thy_info.set_header_processed(true)
           // LOAD-BEARING (heap-pool model, Stage 3): the emulated wrapper-import
           // header edit (Node.Thy; Node.Deps before Isabelle 2026-RC1) is applied

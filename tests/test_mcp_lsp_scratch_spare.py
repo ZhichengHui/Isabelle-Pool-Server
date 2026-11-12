@@ -53,7 +53,7 @@ def test_open_prepares_a_loaded_spare(tmp_path, monkeypatch):
     assert len(_scratch_created(fake)) == 1
     (queue,) = pool._scratch.values()
     spare_sid = queue._queue[0][0]
-    assert {"session_id": spare_sid, "text": TEXT, "report": True} in fake.loads
+    assert {"session_id": spare_sid, "text": TEXT, "report": True, "master_dir": str(f.parent)} in fake.loads
     assert queue.qsize() == 1 and not pool._spare_pending
 
 
@@ -131,7 +131,7 @@ def test_first_multi_attempt_finds_a_spare_per_candidate(tmp_path, monkeypatch):
 
     spares, before, after, out, idle = asyncio.run(run())
     assert len(set(spares)) == 4 and before == after == 4
-    assert all({"session_id": s, "text": TEXT, "report": True} in fake.loads for s in spares)
+    assert all({"session_id": s, "text": TEXT, "report": True, "master_dir": str(f.parent)} in fake.loads for s in spares)
     assert [r["candidate"] for r in out] == cands and idle == 4
 
 

@@ -23,7 +23,7 @@ import httpx
 from ..common import dump_json as _j
 from ..common import translate_http_error
 from .config import Config
-from .pool import attempt_prefix, field_for, header_fields, header_text
+from .pool import attempt_prefix, field_for, header_fields, header_text, master_dir_of
 from .verdict import candidate_verdict
 
 from . import scratch_spare
@@ -394,7 +394,8 @@ async def isabelle_multi_attempt(
         })
     prefix = attempt_prefix(text, line)
     c = await pool.client()
-    imports, suggested = await header_fields(c, text)
+    master_dir = master_dir_of(binding.file_path)
+    imports, suggested = await header_fields(c, text, master_dir)
     key = pool.scratch_key(
         binding.task_group, binding.heap_session, imports, field_for(suggested))
     budget = timeout or Config.ATTEMPT_TIMEOUT
@@ -409,7 +410,7 @@ async def isabelle_multi_attempt(
                 async with pool.scratch_session(key) as (sid, lease):
                     rep_result = await c.load_document(
                         sid, prefix + candidate, report=True,
-                        timeout=budget, lease_id=lease)
+                        timeout=budget, lease_id=lease, master_dir=master_dir)
                     rep = rep_result.get("report") or {}
                     subgoals = None
                     if rep.get("proof_open") or rep.get("pending_qed"):
@@ -473,7 +474,7 @@ async def isabelle_multi_attempt(
                         "error": f"{type(e).__name__}: {e}"}
 
     results = await asyncio.gather(*(try_one(cand) for cand in candidates))
-    scratch_spare.ensure(pool, key, text)  # top the warm, loaded spares up again
+    scratch_spare.ensure(pool, key, text, master_dir)  # top the warm, loaded spares up again
     return json.dumps(list(results), indent=1, ensure_ascii=False, default=str)
 
 

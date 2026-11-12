@@ -15,6 +15,7 @@ import httpx
 from ..common import dump_json as _j
 from ..common.memory_advice import parse_http_error
 from .config import Config
+from .pool import master_dir_of
 from .server import _bound_synced, pool, tool
 
 _TERMINAL = ("done", "cancelled", "error")
@@ -187,6 +188,7 @@ async def isabelle_fill_sorries(
                 max_total_s=total,
                 load_timeout=Config.LOAD_TIMEOUT,
                 lease_id=binding.lease_id,
+                master_dir=master_dir_of(binding.file_path),
             ),
         )
     except httpx.HTTPStatusError as exc:
