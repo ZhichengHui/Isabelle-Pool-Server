@@ -24,6 +24,7 @@ COPY export_isabelle_home /root/.isabelle
 
 # Server defaults suited to a 14g container (all overridable with -e at run).
 ENV ISABELLE_POOL_SIZE=3 \
+    ISABELLE_GATEWAY_JVM_HEAP_MB=4096 \
     ISABELLE_INITIAL_SESSIONS=0 \
     ISABELLE_ENABLE_MEMORY_MANAGEMENT=true \
     ISABELLE_MEMORY_PRESSURE_THRESHOLD=80.0 \

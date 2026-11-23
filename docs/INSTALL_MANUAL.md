@@ -121,6 +121,9 @@ curl http://localhost:8000/api/v1/heaps/available
   VM's own memory or the cgroup-aware admission gate goes blind. On smaller machines lower it
   *and* `ISABELLE_POOL_SIZE`; the gate refuses new sessions (HTTP 503) near the limit instead
   of letting the OOM killer take the JVM.
+- **Gateway JVM heap:** `ISABELLE_GATEWAY_JVM_HEAP_MB` (`.env.example` and the export image: 4096;
+  code default 32768, for a large native host). Keep it well below `mem_limit`; raise both with
+  `ISABELLE_POOL_SIZE` (about 330 MB of JVM heap per live session).
 - **ML heap cap:** the entrypoint writes `ML_OPTIONS="--minheap 500 --enablegcsharing
   --maxheap $ISABELLE_ML_MAXHEAP_MB"` into the Isabelle user settings on the volume (default
   9 GB) so a single runaway poly process fails cleanly instead of OOM-killing the container.
