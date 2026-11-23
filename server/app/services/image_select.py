@@ -10,11 +10,12 @@ Up to date means `isabelle build -n -b` (no build) succeeds for it, with the ses
 the session will use. That check takes seconds (6 s for HOL, 20 s for AutoCorrode), so its result is
 cached, and the cache key is every input the check reads that can change under a running server:
 the image files of the session and of its input heaps, every source file their build databases list
-(`isabelle_session_info.sources`), the nearest ROOT above each source directory (a ROOT edit only
-shows in the `<meta_info>` digest), and ROOTS, etc/settings and etc/preferences of the user home,
-each as (mtime_ns, size). A change to any of them runs the check again; Isabelle stays the judge of
+(`isabelle_session_info.sources`), ROOT and ROOTS in every directory above a source (a ROOT edit only
+shows in the `<meta_info>` digest; the session's own ROOT is among them), ROOT and ROOTS of the `-d`
+directories, and ROOTS, etc/settings and etc/preferences of the user home, each as (mtime_ns, size)
+or None when missing. Path variables other than `~~` and `~` are resolved with `isabelle getenv`. A change to any of them runs the check again; Isabelle stays the judge of
 "up to date". When an input cannot be located (no build database, an unknown path variable, an input
-heap that is not an image here), nothing is cached and the check runs on every call. A key on the
+heap that is not an image here, a relative path), nothing is cached and the check runs on every call. A key on the
 image file alone (before 2026-11-23) missed edits to the sources: the stale image was chosen for up
 to 10 minutes and the session start failed with image_not_current.
 """
@@ -121,6 +122,22 @@ def _db_inputs(image: Path) -> Optional[Tuple[List[str], List[str]]]:
     return sources, inputs
 
 
+_VAR = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _getvar(var: str, env: Dict[str, str]) -> str:
+    """An Isabelle setting (`$AFP`, a component's variable, ...): from `env`, else asked once from
+    `isabelle getenv` and kept in `env` ("" when unset)."""
+    if var not in env:
+        try:
+            out = subprocess.run([_isabelle(), "getenv", "-b", var],
+                                 capture_output=True, text=True, timeout=60).stdout
+        except (OSError, subprocess.SubprocessError):
+            out = ""
+        env[var] = (out or "").strip()
+    return env[var]
+
+
 def _resolve(source: str, env: Dict[str, str]) -> Optional[Path]:
     """A source path of a build database as a file (`~~`, `~`, `$VAR`, absolute); None if unknown."""
     if source.startswith("~~/"):
@@ -129,7 +146,7 @@ def _resolve(source: str, env: Dict[str, str]) -> Optional[Path]:
         base, rest = env.get("USER_HOME"), source[2:]
     elif source.startswith("$"):
         var, _, rest = source[1:].partition("/")
-        base = env.get(var)
+        base = _getvar(var, env) if _VAR.fullmatch(var) else None
     elif source.startswith("/"):
         return Path(source)
     else:
@@ -137,11 +154,14 @@ def _resolve(source: str, env: Dict[str, str]) -> Optional[Path]:
     return Path(base) / rest if base else None
 
 
-def _nearest_root(d: Path) -> Optional[Path]:
-    for q in (d, *d.parents):
-        if (q / "ROOT").is_file():
-            return q / "ROOT"
-    return None
+def _catalog_files(dirs: Set[Path]) -> List[Path]:
+    """ROOT and ROOTS of each of `dirs` and of all their ancestors, existing or not (a ROOT that
+    appears changes the key too). The session's own ROOT is among them wherever its theories lie,
+    also when a subdirectory holds a ROOT of another session."""
+    above: Set[Path] = set()
+    for d in dirs:
+        above.update((d, *d.parents))
+    return [a / f for a in sorted(above) for f in ("ROOT", "ROOTS")]
 
 
 def _inputs_key(name: str, imgs: Dict[str, Path], env: Dict[str, str],
@@ -153,7 +173,7 @@ def _inputs_key(name: str, imgs: Dict[str, Path], env: Dict[str, str],
         return None
     sources, inputs = db
     parts: List[tuple] = [(str(imgs[name]), _stat(imgs[name]))]
-    roots: Dict[Path, Optional[Path]] = {}
+    source_dirs: Set[Path] = set()
     for source in sources:
         if source.startswith("<"):  # <meta_info>, <build_prefs:...>: digests, no file
             continue
@@ -161,9 +181,8 @@ def _inputs_key(name: str, imgs: Dict[str, Path], env: Dict[str, str],
         if path is None:
             return None
         parts.append((str(path), _stat(path)))
-        if path.parent not in roots:
-            roots[path.parent] = _nearest_root(path.parent)
-    parts.extend((str(r), _stat(r)) for r in sorted(set(filter(None, roots.values()))))
+        source_dirs.add(path.parent)
+    parts.extend((str(f), _stat(f)) for f in _catalog_files(source_dirs))
     for parent in inputs:
         if parent.startswith("<"):  # Pure lists `<meta_info>` among its input heaps
             continue
@@ -186,6 +205,8 @@ def current(name: str, imgs: Dict[str, Path], dirs: Tuple[str, ...]) -> bool:
     home_user = env.get("ISABELLE_HOME_USER")
     if key is not None and home_user:
         key += tuple((f, _stat(Path(home_user) / f)) for f in _USER_FILES)
+    if key is not None:  # the -d directories: the sessions they define and catalog
+        key += tuple((str(f), _stat(f)) for d in dirs for f in (Path(d) / "ROOT", Path(d) / "ROOTS"))
     hit = _current.get((name, dirs))
     if key is not None and hit and hit[0] == key:
         return hit[1]
@@ -203,10 +224,11 @@ def selection(imports: List[str], field: Optional[str], dirs: Tuple[str, ...] = 
     """The image to start on for `imports` (see the module docstring), as {field, from_source,
     stale}: `from_source` are the qualified imports the chosen image does not contain (the session
     loads them from source), `stale` the images that contain all of them but are out of date (a
-    source changed after the build; empty when one is chosen)."""
+    source changed after the build; empty when one is chosen), `field_stale` whether the proposed
+    field is one of them: then the session cannot start at all, and `from_source` is every import."""
     wanted = {m.group(1) for m in (_QUALIFIED.match(i) for i in imports) if m}
     if not wanted:
-        return {"field": field, "from_source": [], "stale": []}
+        return {"field": field, "from_source": [], "stale": [], "field_stale": False}
     stale: List[str] = []
     with _lock:
         imgs = images()
@@ -215,10 +237,13 @@ def selection(imports: List[str], field: Optional[str], dirs: Tuple[str, ...] = 
             s for s in sorted(covering, key=lambda s: len(theories(s, imgs))) if s != field]
         for s in candidates:
             if current(s, imgs, dirs):
-                return {"field": s, "from_source": [], "stale": []}
+                return {"field": s, "from_source": [], "stale": [], "field_stale": False}
             stale.append(s)
         have = theories(field, imgs) if field in imgs else set()
-    return {"field": field, "from_source": sorted(wanted - have), "stale": stale}
+    if field in stale:  # the session start itself fails (image_not_current): nothing is usable
+        return {"field": field, "from_source": sorted(wanted), "stale": stale, "field_stale": True}
+    return {"field": field, "from_source": sorted(wanted - have), "stale": stale,
+            "field_stale": False}
 
 
 def select_field(imports: List[str], field: Optional[str], dirs: Tuple[str, ...] = ()) -> Optional[str]:

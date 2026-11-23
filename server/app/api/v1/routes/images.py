@@ -31,6 +31,8 @@ class SelectFieldResponse(BaseModel):
     from_source: List[str] = Field(default_factory=list)
     # images that contain all of them but are out of date (their sources changed since the build)
     stale: List[str] = Field(default_factory=list)
+    # the proposed field is itself out of date: the session cannot start on it
+    field_stale: bool = False
 
 
 @router.post("/api/v1/select_field", response_model=SelectFieldResponse)

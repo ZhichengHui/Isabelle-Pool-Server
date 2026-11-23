@@ -57,13 +57,23 @@ def test_switches_to_the_smallest_current_covering_image(heaps):
     assert m.select_field(["Lib.A"], "Lib") == "Big"
 
 
+def _sel(field, from_source=(), stale=(), field_stale=False):
+    return {"field": field, "from_source": list(from_source), "stale": list(stale),
+            "field_stale": field_stale}
+
+
 def test_selection_reports_what_loads_from_source_and_the_stale_images(heaps):
-    assert m.selection(["Lib.A"], "HOL") == {"field": "Lib", "from_source": [], "stale": []}
+    assert m.selection(["Lib.A"], "HOL") == _sel("Lib")
     heaps.update({"Lib", "Big"})  # both images that hold Lib.A are out of date
-    assert m.selection(["Lib.A", "Main"], "HOL") == {
-        "field": "HOL", "from_source": ["Lib.A"], "stale": ["Lib", "Big"]}
-    assert m.selection(["Own.T"], "HOL") == {"field": "HOL", "from_source": ["Own.T"], "stale": []}
-    assert m.selection(["Main"], "HOL") == {"field": "HOL", "from_source": [], "stale": []}
+    assert m.selection(["Lib.A", "Main"], "HOL") == _sel("HOL", ["Lib.A"], ["Lib", "Big"])
+    assert m.selection(["Own.T"], "HOL") == _sel("HOL", ["Own.T"])
+    assert m.selection(["Main"], "HOL") == _sel("HOL")
+
+
+def test_selection_when_the_proposed_field_itself_is_out_of_date(heaps):
+    heaps.update({"Lib", "Big"})
+    # the session would start on Lib, which holds every import but is stale: it cannot start
+    assert m.selection(["Lib.A"], "Lib") == _sel("Lib", ["Lib.A"], ["Lib", "Big"], True)
 
 
 def test_keeps_the_field_when_nothing_covers(heaps):
@@ -107,14 +117,23 @@ def cache(tmp_path, monkeypatch):
     monkeypatch.setattr(m, "_theories", {})
     monkeypatch.setattr(m, "_current", {})
     calls = []
-    monkeypatch.setattr(m.subprocess, "run",
-                        lambda cmd, **kw: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0))
+    getenv = {}  # what `isabelle getenv -b VAR` answers
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        if cmd[1] == "getenv":
+            return subprocess.CompletedProcess(cmd, 0, stdout=getenv.get(cmd[-1], "") + "\n")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(m.subprocess, "run", run)
 
     def check(name="Lib", dirs=()):
+        """Run the check; the number of `isabelle build -n` runs so far."""
         assert m.current(name, m.images(), dirs)
-        return len(calls)
+        return sum(1 for c in calls if c[1] == "build")
 
-    return check, {"dist": dist, "home": home, "home_user": home_user, "heaps": heaps_dir}
+    return check, {"dist": dist, "home": home, "home_user": home_user, "heaps": heaps_dir,
+                   "getenv": getenv, "calls": calls}
 
 
 def test_unchanged_inputs_reuse_the_result(cache):
@@ -176,3 +195,43 @@ def test_no_cache_without_a_build_database(cache):
     (d["heaps"] / "Bare").write_bytes(b"heap")
     assert check("Bare") == 1
     assert check("Bare") == 2
+
+
+def test_a_root_of_another_session_nearer_to_a_source_does_not_hide_the_own_root(cache):
+    check, d = cache
+    (d["home"] / "proj" / "sub" / "ROOT").write_text("session Other = HOL")
+    assert check() == 1
+    _touch(d["home"] / "proj" / "ROOT", "session Lib = HOL (options) + theories B")
+    assert check() == 2
+
+
+def test_a_root_that_appears_runs_the_check_again(cache):
+    check, d = cache
+    assert check() == 1
+    (d["home"] / "proj" / "sub" / "ROOT").write_text("session Other = HOL")
+    assert check() == 2
+
+
+def test_the_root_of_a_session_directory_is_part_of_the_key(cache, tmp_path):
+    check, _ = cache
+    extra = tmp_path / "extra"
+    extra.mkdir()
+    (extra / "ROOT").write_text("session X = HOL")
+    assert check(dirs=(str(extra),)) == 1
+    assert check(dirs=(str(extra),)) == 1
+    _touch(extra / "ROOT", "session X = HOL + theories Y")
+    assert check(dirs=(str(extra),)) == 2
+
+
+def test_other_path_variables_are_resolved_with_getenv_and_cached(cache, tmp_path):
+    check, d = cache
+    afp = tmp_path / "afp"
+    (afp / "Word_Lib").mkdir(parents=True)
+    (afp / "Word_Lib" / "W.thy").write_text("theory W")
+    d["getenv"]["AFP"] = str(afp)
+    _image(d["heaps"], "Afp", ["Afp.W"], ["HOL"], sources=["$AFP/Word_Lib/W.thy"])
+    assert check("Afp") == 1
+    assert check("Afp") == 1  # cached: the source was located
+    assert sum(1 for c in d["calls"] if c[1] == "getenv") == 1  # asked once
+    _touch(afp / "Word_Lib" / "W.thy", "theory W begin end")
+    assert check("Afp") == 2

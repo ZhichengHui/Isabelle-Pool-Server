@@ -108,7 +108,7 @@ def test_a_failed_open_puts_the_note_before_the_retry_advice():
     assert out["advice"][0] == err.agent_note and "retry" in out["advice"][1]
 
 
-def test_a_failure_without_http_status_carries_the_note_too():
+def test_a_failure_without_http_status_stays_a_failure_and_carries_the_note():
     err = httpx.ReadTimeout("timed out")
     err.agent_note = "No heap contains ..."
 
@@ -116,8 +116,25 @@ def test_a_failure_without_http_status_carries_the_note_too():
     async def tool() -> str:
         raise err
 
+    try:
+        asyncio.run(tool())
+    except RuntimeError as e:  # a tool error for the client (isError), not a normal result
+        assert "ReadTimeout: timed out" in str(e) and "No heap contains ..." in str(e)
+        assert e.__cause__ is err
+    else:
+        raise AssertionError("the failure must propagate")
+
+
+def test_an_out_of_date_start_image_is_not_reported_as_busy():
+    resp = httpx.Response(409, json={"error": "image_not_current", "detail": "Session image X ..."},
+                          request=httpx.Request("POST", "http://gym/x"))
+
+    @_guard()
+    async def tool() -> str:
+        raise httpx.HTTPStatusError("409", request=resp.request, response=resp)
+
     out = json.loads(asyncio.run(tool()))
-    assert out["heap_note"] == err.agent_note and "ReadTimeout" in out["error"]
+    assert out["error"] == "image_not_current" and "out of date" in out["advice"][0]
 
 
 def test_other_failures_are_not_swallowed():
@@ -228,3 +245,64 @@ def test_a_failed_open_with_siblings_carries_both_notes(monkeypatch, tmp_path):
         assert "this open failed after" in e.agent_note
     else:
         raise AssertionError("the failure must propagate")
+
+
+def test_the_proposed_heap_itself_out_of_date_says_the_session_cannot_start(tmp_path):
+    dirs = _project(tmp_path)
+    note = heap_note(["Sort.B"], ["Sort"], dirs, "g", field_stale=True)
+    assert "it is out of date" in note and "cannot start until it is rebuilt" in note
+    assert "loaded from source" not in note
+    assert "Rebuild it with isabelle_build_heap(" in note
+
+
+def test_own_and_other_out_of_date_heaps_get_their_own_advice(tmp_path):
+    dirs = _project(tmp_path)
+    note = heap_note(["Sort.B"], ["Sort", "Shared", "Lib2"], dirs, "g")
+    assert note.startswith("The heaps Sort, Shared, Lib2 contain")
+    assert "they are out of date: their source theories changed after they were built" in note
+    assert 'Rebuild it with isabelle_build_heap(task_group="g"' in note
+    assert "Shared, Lib2 are not sessions of this project: do not rebuild them; " \
+           "tell the user that they are out of date." in note
+
+
+def _status_error(status, body):
+    resp = httpx.Response(status, json=body, request=httpx.Request("POST", "http://gym/x"))
+    return httpx.HTTPStatusError(str(status), request=resp.request, response=resp)
+
+
+def test_a_quick_refusal_for_another_reason_carries_no_note(monkeypatch, tmp_path):
+    async def acquire(self, **kw):
+        raise _status_error(503, {"error": "pool_full"})
+
+    p, f = _pool_with(monkeypatch, tmp_path, acquire, note="No heap contains X.")
+    try:
+        asyncio.run(p._create_binding(f, None, None, None))
+    except httpx.HTTPStatusError as e:
+        assert not getattr(e, "agent_note", None)
+    else:
+        raise AssertionError("the failure must propagate")
+
+
+def test_a_refused_out_of_date_image_carries_the_heap_note_only(monkeypatch, tmp_path):
+    async def acquire(self, **kw):
+        raise _status_error(409, {"error": "image_not_current", "detail": "..."})
+
+    p, f = _pool_with(monkeypatch, tmp_path, acquire, note="The heap Sort ... rebuilt.")
+    try:
+        asyncio.run(p._create_binding(f, None, None, None))
+    except httpx.HTTPStatusError as e:
+        assert e.agent_note == "The heap Sort ... rebuilt."  # no sibling note: it was quick
+    else:
+        raise AssertionError("the failure must propagate")
+
+
+def test_the_sibling_note_names_the_heap_as_parent(monkeypatch, tmp_path):
+    from mcp_servers.lsp import pool as pool_mod
+
+    async def acquire(self, **kw):
+        return {"session_id": "s", "lease_id": "l"}
+
+    p, f = _pool_with(monkeypatch, tmp_path, acquire)
+    monkeypatch.setattr(pool_mod.Config, "SIBLING_NOTE_S", 0.0)
+    b = asyncio.run(p._create_binding(f, None, "MyHeap", None))
+    assert 'session <Name> = "MyHeap" + theories B' in b.heap_note

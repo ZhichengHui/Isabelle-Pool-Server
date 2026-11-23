@@ -80,6 +80,16 @@ class FileBinding:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
+def _image_not_current(e: BaseException) -> bool:
+    """The server refused the session start: its image is out of date (409 image_not_current)."""
+    if not isinstance(e, httpx.HTTPStatusError) or e.response.status_code != 409:
+        return False
+    try:
+        return e.response.json().get("error") == "image_not_current"
+    except ValueError:
+        return False
+
+
 class LspPool(GymClientMixin):
     def __init__(self) -> None:
         self._init_client(Config.GYM_URL, Config.HTTP_TIMEOUT)
@@ -153,6 +163,7 @@ class LspPool(GymClientMixin):
         # Theories of the file's own directory imported by bare name (absolute paths here) are
         # checked from source by every acquire; heap_notes.sibling_note when that was slow.
         siblings = [i for i in imports or () if i.startswith("/")]
+        parent = heap_session or field  # what a session holding the siblings has to build on
         started = time.monotonic()
         try:
             resp = await c.acquire_session(
@@ -160,16 +171,21 @@ class LspPool(GymClientMixin):
                 task_group=group, heap_session=heap_session, label=label or canon, **extra,
             )
         except Exception as e:
-            # A load from source that outlives the server's budget fails here; the guard puts
-            # the note into the error result instead of a bare "retry" (common/guard.py).
-            failed_note = join_notes(note, sibling_note(
-                siblings, field, group, time.monotonic() - started, failed=True))
+            # Only failures the notes explain carry them (the guard puts them before the bare
+            # "retry", common/guard.py): a load that ran into a timeout or ran long, and, for the
+            # heap note, a start refused because the image is out of date. A quick refusal for
+            # another reason (pool full, memory) keeps its own advice alone.
+            elapsed = time.monotonic() - started
+            slow = isinstance(e, httpx.TimeoutException) or elapsed >= Config.SIBLING_NOTE_S
+            failed_note = join_notes(
+                note if slow or _image_not_current(e) else None,
+                sibling_note(siblings, parent, group, elapsed, failed=True) if slow else None)
             if failed_note:
                 setattr(e, "agent_note", failed_note)
             raise
         elapsed = time.monotonic() - started
         if elapsed >= Config.SIBLING_NOTE_S:
-            note = join_notes(note, sibling_note(siblings, field, group, elapsed, failed=False))
+            note = join_notes(note, sibling_note(siblings, parent, group, elapsed, failed=False))
         binding = FileBinding(
             file_path=canon,
             session_id=resp["session_id"],

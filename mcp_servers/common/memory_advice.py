@@ -238,6 +238,15 @@ def translate_http_error(  # pylint: disable=too-many-arguments
                 f"need ({tools.release_idle}) and retry in {retry} s."
             ],
         }
+    if status == 409 and error == "image_not_current":
+        return {
+            "error": "image_not_current",
+            "detail": info["detail"],
+            "advice": [
+                "The session image this file starts on is out of date (its sources changed "
+                "after it was built), so no session can start on it until it is rebuilt."
+            ],
+        }
     if status == 409:
         return {
             "error": "busy",

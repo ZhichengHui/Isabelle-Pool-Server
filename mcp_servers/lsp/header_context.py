@@ -96,7 +96,8 @@ async def file_context_note(
             sel = await client.select_image(imports, field, list(dirs))
             field = sel.get("field") or field
             note = heap_note(sel.get("from_source") or [], sel.get("stale") or [], dirs,
-                             task_group or Config.DEFAULT_TASK_GROUP)
+                             task_group or Config.DEFAULT_TASK_GROUP,
+                             field_stale=bool(sel.get("field_stale")))
         except Exception as e:  # an older server without the endpoint: keep the field
             logger.debug("select_field unavailable: %s", e)
     return imports, field, dirs, note

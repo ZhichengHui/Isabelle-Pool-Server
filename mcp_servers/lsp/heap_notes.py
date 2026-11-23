@@ -42,39 +42,52 @@ def _build_call(task_group: str, project: str, session: str) -> str:
             f'session_name="{session}")')
 
 
+def _plural(names: Sequence[str], one: str, many: str) -> str:
+    return many if len(names) > 1 else one
+
+
 def heap_note(from_source: Sequence[str], stale: Sequence[str], dirs: Sequence[str],
-              task_group: str) -> Optional[str]:
-    """The note for a session that loads `from_source` from source, or None when there is nothing
-    the agent should know (everything comes from a heap, or only theories of sessions outside the
+              task_group: str, field_stale: bool = False) -> Optional[str]:
+    """The note for a session that loads `from_source` from source, or that cannot start at all
+    because the image it starts on is out of date (`field_stale`); None when there is nothing the
+    agent should know (everything comes from a heap, or only theories of sessions outside the
     project are loaded and no heap of them is out of date)."""
     if not from_source:
         return None
     own = session_dirs_of(dirs)
     theories = ", ".join(from_source)
-    sessions: List[str] = list(dict.fromkeys(_session(t) for t in from_source))
-    loading = (f"so the theories this file imports ({theories}) are loaded from source, which can "
-               "take several minutes")
     if stale:
-        heaps = ", ".join(stale)
         mine = [s for s in stale if s in own]
-        note = (f"The heap {heaps} contains the theories this file imports, but it is out of "
-                "date: its source theories changed after it was built, and an out-of-date heap "
-                f"cannot be used, {loading}.")
+        others = [s for s in stale if s not in own]
+        heaps = ", ".join(stale)
+        effect = ("so this file's session cannot start until it is rebuilt" if field_stale else
+                  f"so the theories this file imports ({theories}) are loaded from source, which "
+                  "can take several minutes")
+        note = (_plural(stale, f"The heap {heaps} contains", f"The heaps {heaps} contain")
+                + " the theories this file imports, but "
+                + _plural(stale, "it is out of date: its source theories changed after it was built",
+                          "they are out of date: their source theories changed after they were built")
+                + f", and an out-of-date heap cannot be used, {effect}.")
         if mine:
             calls = "; ".join(_build_call(task_group, own[s], s) for s in mine)
-            note += (f" Rebuild it with {calls}, then reopen this file. Rebuild it again each time "
-                     "you change those theories.")
-        else:
-            note += (" It is not a session of this project: do not rebuild it; tell the user that "
-                     "it is out of date.")
+            note += (f" Rebuild {_plural(mine, 'it', 'them')} with {calls}, then reopen this file. "
+                     f"Rebuild {_plural(mine, 'it', 'them')} again each time you change those "
+                     "theories.")
+        if others:
+            names = ", ".join(others)
+            note += (f" {names} {_plural(others, 'is not a session', 'are not sessions')} of this "
+                     f"project: do not rebuild {_plural(others, 'it', 'them')}; tell the user that "
+                     f"{_plural(others, 'it is', 'they are')} out of date.")
         return note
+    sessions: List[str] = list(dict.fromkeys(_session(t) for t in from_source))
     mine = [s for s in sessions if s in own]
     if not mine:
         return None
     calls = "; ".join(_build_call(task_group, own[s], s) for s in mine)
-    return (f"No heap contains the theories this file imports, {loading}. Build a heap for them "
-            f"with {calls}, then reopen this file; opening it then takes under a minute. Rebuild "
-            "the heap each time you change those theories.")
+    return (f"No heap contains the theories this file imports, so they ({theories}) are loaded "
+            f"from source, which can take several minutes. Build a heap for them with {calls}, "
+            "then reopen this file; opening it then takes under a minute. Rebuild the heap each "
+            "time you change those theories.")
 
 
 def sibling_note(siblings: Sequence[str], parent: str, task_group: str, elapsed_s: float,

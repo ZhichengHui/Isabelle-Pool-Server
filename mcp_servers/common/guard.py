@@ -63,10 +63,11 @@ def make_guard(  # pylint: disable=too-many-arguments
                 )
                 return json.dumps(_with_agent_note(result, exc), default=str)
             except Exception as exc:  # pylint: disable=broad-exception-caught
-                if not getattr(exc, "agent_note", None):
+                note = getattr(exc, "agent_note", None)
+                if not note:
                     raise
-                result = {"error": f"{type(exc).__name__}: {exc}"}
-                return json.dumps(_with_agent_note(result, exc), default=str)
+                # still a tool error (isError) for the client, now with the note in its text
+                raise RuntimeError(f"{type(exc).__name__}: {exc}. {note}") from exc
             registry.clear_memory_failures(owner)
             try:
                 client = await get_client()
