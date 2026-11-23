@@ -38,9 +38,9 @@ from ..common import (  # noqa: F401  (is_not_found re-exported)
     SessionRegistry,
     is_not_found,
 )
-from . import idle_release, lease_renewal
+from . import idle_release, import_watch, lease_renewal
 from .config import Config
-from .heap_notes import join_notes, sibling_note
+from .heap_notes import image_not_current as _image_not_current, join_notes, sibling_note
 from .sibling_imports import (  # noqa: F401  (re-exported)
     master_dir_of, resolve_sibling_imports, sibling_imports as _sibling_imports,
 )
@@ -77,17 +77,12 @@ class FileBinding:
     # heap_notes.py: why this file's imports load from source and what to build; shown once
     heap_note: Optional[str] = None
     heap_note_shown: bool = False
+    # import_watch.py: the project files this file imports, their state when the session started,
+    # and its digest (the scratch sessions of the file are keyed by it)
+    import_files: List[str] = field(default_factory=list)
+    import_state: Tuple[Any, ...] = ()
+    import_digest: str = ""
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-
-
-def _image_not_current(e: BaseException) -> bool:
-    """The server refused the session start: its image is out of date (409 image_not_current)."""
-    if not isinstance(e, httpx.HTTPStatusError) or e.response.status_code != 409:
-        return False
-    try:
-        return e.response.json().get("error") == "image_not_current"
-    except ValueError:
-        return False
 
 
 class LspPool(GymClientMixin):
@@ -98,6 +93,9 @@ class LspPool(GymClientMixin):
         self._creating: Dict[str, asyncio.Future] = {}  # in-flight binding creations (single-flight)
         # scratch pool: context key -> (queue of idle sessions, created count)
         self._scratch: Dict[Tuple, asyncio.Queue] = {}
+        # import digests that an edit of an imported theory replaced: a scratch session of one
+        # holds the old version and is closed instead of reused (import_watch.refresh)
+        self._stale_generations: set = set()
         self._scratch_counts: Dict[Tuple, int] = {}
         self._scratch_lock = asyncio.Lock()
         self._spare_pending: dict = {}  # scratch_spare.py: context -> spares in preparation
@@ -111,7 +109,7 @@ class LspPool(GymClientMixin):
 
     async def _create_binding(
         self, canon: str, task_group: Optional[str], heap_session: Optional[str],
-        label: Optional[str],
+        label: Optional[str], release_old: bool = True,
     ) -> FileBinding:
         # Check the path BEFORE acquiring anything: a binding used to be created
         # (and a server session leased) for any path, and only the later sync()
@@ -143,6 +141,11 @@ class LspPool(GymClientMixin):
             imports, field, session_dirs, note = await file_context_note(
                 c, text, canon, heap_session, group)
             imports = imports or None
+        try:
+            watched = await import_watch.import_files(c, imports or [], canon, session_dirs)
+        except Exception:  # noqa: BLE001  (no watch: the file behaves as before)
+            watched = []
+        watched_state = import_watch.state(watched)
         # Acquire (not create): sessions released by other bindings with the
         # same dependency key (task_group + heap / imports, default field)
         # are reused WARM instead of building a fresh session per file — but
@@ -193,6 +196,9 @@ class LspPool(GymClientMixin):
             task_group=group,
             heap_session=heap_session,
             heap_note=note,
+            import_files=watched,
+            import_state=watched_state,
+            import_digest=import_watch.digest(watched_state),
         )
         lease_renewal.ensure(self)
         idle_release.ensure(self)
@@ -209,7 +215,7 @@ class LspPool(GymClientMixin):
         async with self._bindings_lock:
             old = self._bindings.pop(canon, None)
             self._bindings[canon] = binding
-        if old is not None:
+        if old is not None and release_old:
             await self._safe_release(old)
         return binding
 
@@ -287,6 +293,10 @@ class LspPool(GymClientMixin):
         with open(canon, encoding="utf-8") as f:
             text = f.read()
         async with binding.lock:
+            if binding.import_files:
+                now = import_watch.state(binding.import_files)
+                if now != binding.import_state:
+                    await import_watch.refresh(self, binding, now)
             if text == binding.cached_text and not (binding.last_report or {}).get("timed_out"):
                 return False
             started = time.monotonic()
@@ -408,13 +418,17 @@ class LspPool(GymClientMixin):
     def scratch_key(
         self, task_group: Optional[str], heap_session: Optional[str],
         imports: List[str], field: Optional[str], session_dirs: Tuple[str, ...] = (),
+        generation: str = "",
     ) -> Tuple:
+        """`generation`: the import digest of the file (FileBinding.import_digest), so a session
+        loaded with an old version of an imported project theory is never reused."""
         return (
             task_group or Config.DEFAULT_TASK_GROUP,
             heap_session or "",
             tuple(sorted(imports)),
             field or Config.DEFAULT_FIELD,
             tuple(session_dirs),
+            generation,
         )
 
     async def acquire_scratch(self, key: Tuple) -> Tuple[str, str]:
@@ -458,7 +472,7 @@ class LspPool(GymClientMixin):
                     f"{Config.SCRATCH_WAIT_TIMEOUT:.0f}s (ISABELLE_MCP_LSP_SCRATCH_POOL_SIZE / "
                     f"ISABELLE_MCP_LSP_SCRATCH_WAIT_TIMEOUT)"
                 ) from None
-        task_group, heap_session, imports, field, session_dirs = key
+        task_group, heap_session, imports, field, session_dirs, _ = key
         try:
             c = await self.client()
             extra = {"session_dirs": list(session_dirs)} if session_dirs else {}
@@ -519,18 +533,23 @@ class LspPool(GymClientMixin):
                 await self.release_scratch(key, session_id, lease_id)
 
     async def release_scratch(self, key: Tuple, session_id: str, lease_id: str) -> None:
+        if key[-1] and key[-1] in self._stale_generations:  # holds an old imported theory
+            await self.drop_scratch(key, session_id, lease_id)
+            return
         queue = self._scratch.get(key)
         self.registry.touch(session_id)
         if queue is not None:
             queue.put_nowait((session_id, lease_id, time.time()))
 
-    async def retire_idle_scratch(self, max_idle_s: float = 0.0) -> int:
+    async def retire_idle_scratch(self, max_idle_s: float = 0.0, generation: str = "") -> int:
         """Close every warm scratch session idle for at least ``max_idle_s``
         seconds (0 = all idle ones). Returns how many were closed. Used by
         isabelle_release_idle and by the memory reminder hook."""
         now = time.time()
         dropped = 0
         for key, queue in list(self._scratch.items()):
+            if generation and key[-1] != generation:  # only the sessions of that import version
+                continue
             keep = []
             while True:
                 try:

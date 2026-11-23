@@ -399,7 +399,8 @@ async def isabelle_multi_attempt(
     imports, field, session_dirs = await file_context(
         c, text, binding.file_path, binding.heap_session)
     key = pool.scratch_key(
-        binding.task_group, binding.heap_session, imports, field, session_dirs)
+        binding.task_group, binding.heap_session, imports, field, session_dirs,
+        binding.import_digest)
     budget = timeout or Config.ATTEMPT_TIMEOUT
     cap = max(1, min(Config.MAX_PARALLEL, len(candidates)))
     sem = asyncio.Semaphore(cap)

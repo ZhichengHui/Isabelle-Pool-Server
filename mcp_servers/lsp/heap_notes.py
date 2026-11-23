@@ -19,6 +19,8 @@ heap can hold them: every open checks them from source. When an open was slow (C
 from __future__ import annotations
 
 import os
+
+import httpx
 from typing import Dict, List, Optional, Sequence
 
 from .project_sessions import session_parents
@@ -123,3 +125,13 @@ def join_notes(*notes: Optional[str]) -> Optional[str]:
     """The notes that are there, one after the other; None when there are none."""
     present = [n for n in notes if n]
     return " ".join(present) if present else None
+
+
+def image_not_current(e: BaseException) -> bool:
+    """The server refused the session start: its image is out of date (409 image_not_current)."""
+    if not isinstance(e, httpx.HTTPStatusError) or e.response.status_code != 409:
+        return False
+    try:
+        return e.response.json().get("error") == "image_not_current"
+    except ValueError:
+        return False

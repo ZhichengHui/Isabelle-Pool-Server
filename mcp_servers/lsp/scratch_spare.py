@@ -108,7 +108,7 @@ def schedule_for_binding(pool: LspPool, binding: FileBinding) -> None:
             imports, field, session_dirs = await file_context(
                 c, text, binding.file_path, binding.heap_session)
             key = pool.scratch_key(binding.task_group, binding.heap_session, imports, field,
-                                   session_dirs)
+                                   session_dirs, binding.import_digest)
         except Exception as e:  # noqa: BLE001
             logger.info("scratch spare: no key for %s: %s", binding.file_path, e)
             return
