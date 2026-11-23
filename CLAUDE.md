@@ -280,6 +280,9 @@ ISABELLE_REPL_SETTLE_TIMEOUT=60    # Settle budget (s) for waits with no request
 ISABELLE_REPL_SUBGOALS_TIMEOUT=20  # Overlay query budgets (s): subgoals/in_proof/state; also
 ISABELLE_REPL_LOCAL_FACTS_TIMEOUT=20        #   LOCAL_FACTS, GLOBAL_FACTS_TIMEOUT_MINUTES (5)
 ISABELLE_REPL_MEM_TIMEOUT=5        # Per-session memory probe budget (pid + Poly/ML heap stats)
+ISABELLE_GATEWAY_JVM_HEAP_MB=32768 # Gateway JVM -Xmx (one JVM holds the PIDE state of every session; the
+ISABELLE_GATEWAY_JVM_MIN_HEAP_MB=2048  #   launcher default 4 GB ran out at 34-64 sessions). Passed as `isabelle scala`
+                                   #   -J options with -Xlog:gc to logs/gateway-gc-<pid>.log (repl_backend_gateway.py)
 ISABELLE_TIMEOUT_BACKEND_GRACE=10  # Python-side future timeout = request timeout + this grace,
                                    # so the JVM's own timeout result (with rollback) arrives first
 

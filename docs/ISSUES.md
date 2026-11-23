@@ -504,6 +504,15 @@ owner-lease DELETE → 200 and the session is gone; 8/8 in-container tests.
 invisible during the 2026-09-10 incident)
 **Found:** 2026-09-13, while deploying JVM GC logging (issue 5 rec 1)
 **Status:** ✅ Resolved 2026-09-13 (GC logging now wired via the user settings file).
+**Correction 2026-11-23:** the settings-file entry (`ISABELLE_TOOL_JAVA_OPTIONS`) reaches Isabelle's
+command-line tools but NOT the gateway: `isabelle scala` builds its JVM options from
+`ISABELLE_JAVA_SYSTEM_OPTIONS` and `ISABELLE_SCALAC_OPTIONS` (`-J-Xmx4g`), so the gateway ran
+without GC logging and with a 4 GB heap. That heap ran out with 34–64 live sessions
+(`java.lang.OutOfMemoryError: Java heap space` in `Bytes.read_stream`; 84 gateway restarts
+2026-11-18..23, each dropping every session). The gateway now gets `-J-Xms`/`-J-Xmx`
+(`ISABELLE_GATEWAY_JVM_MIN_HEAP_MB` / `ISABELLE_GATEWAY_JVM_HEAP_MB`, default 2 GB / 32 GB) and
+`-J-Xlog:gc*` (`logs/gateway-gc-<pid>.log`) on its command line, after the launcher's own options,
+so they win (verified: `-J-Xmx3000m` gives maxMemory 3000 MB, default 4096 MB).
 
 #### Root cause
 
