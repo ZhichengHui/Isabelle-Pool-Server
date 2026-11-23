@@ -87,8 +87,8 @@ def _pool(monkeypatch, tmp_path):
             log["loaded"].append(sid)
             return {"report": {"success": True, "commands": []}}
 
-    async def ctx(c, text, canon, heap_session, group):
-        return [b[:-4]], "HOL", (), None
+    async def ctx(c, text, canon, heap_session):
+        return [b[:-4]], "HOL", ()
 
     p = pool_mod.LspPool()
 
@@ -96,7 +96,7 @@ def _pool(monkeypatch, tmp_path):
         return Client()
 
     monkeypatch.setattr(p, "client", client)
-    monkeypatch.setattr(pool_mod, "file_context_note", ctx)
+    monkeypatch.setattr(pool_mod, "file_context", ctx)
     monkeypatch.setattr(pool_mod.lease_renewal, "ensure", lambda pool: None)
     monkeypatch.setattr(pool_mod.idle_release, "ensure", lambda pool: None)
     return p, a, b, log

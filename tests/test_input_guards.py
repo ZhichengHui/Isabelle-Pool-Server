@@ -282,14 +282,18 @@ def test_session_requests_validate_group_and_project(tmp_path, monkeypatch):
 # --------------------------------------------------------- HeapPool itself
 
 class _FakeProc:
-    returncode = 0
+    """`isabelle build` as build_process.start runs it (output to the given log file)."""
+    returncode = None
+    pid = -1
 
-    async def communicate(self):
-        return b"Build OK\n", b""
+    async def wait(self):
+        self.returncode = 0
+        return 0
 
 
 def _fake_exec(monkeypatch):
     async def fake(*args, **kwargs):
+        kwargs["stdout"].write(b"Build OK\n")
         return _FakeProc()
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake)
 

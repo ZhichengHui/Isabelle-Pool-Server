@@ -11,6 +11,10 @@ class Thy_Info(val name: String, status: Option[Thy_Status] = None) {
   /** Directory the document comes from ("" = unknown): bare-name imports resolve
    *  against it (see Edit_Utils). */
   var master_dir: String = ""
+  /** Session qualifier of the document's own imports: a bare `imports B` names `<qualifier>.B`.
+   *  Draft, except on a heap generated for the file's imports (Edit_Utils.document_qualifier):
+   *  there B is `<that session>.B`, already in the heap, and must not be loaded again as Draft.B. */
+  var qualifier: String = Sessions.DRAFT
   private var current_status: Thy_Status = status.getOrElse(Thy_Status())
   private val saved_states: mutable.Map[EnvStateID, Thy_Status] = mutable.Map.empty
 

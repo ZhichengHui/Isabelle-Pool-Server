@@ -27,13 +27,13 @@ class Config:
     SELECT_FIELD: bool = env_bool(_P, "SELECT_FIELD", True)
     DEFAULT_TASK_GROUP: str = env_str(_P, "TASK_GROUP", "default")
 
-    # httpx timeout for the underlying client (must exceed load/build budgets).
-    HTTP_TIMEOUT: float = env_float(_P, "HTTP_TIMEOUT", 600.0)
+    # httpx timeout for the underlying client. Longer than every wait the server does inside a
+    # request (its session start budget, ISABELLE_SESSION_CREATE_TIMEOUT, is 600 s), so the
+    # server's own answer (e.g. session_start_timeout) arrives instead of a client timeout; heap
+    # builds do not count: the server answers 202 at once and builds in the background.
+    HTTP_TIMEOUT: float = env_float(_P, "HTTP_TIMEOUT", 720.0)
     # Wall budget (s) for load_document syncs and per-candidate attempt verification.
     LOAD_TIMEOUT: float = env_float(_P, "LOAD_TIMEOUT", 30.0)
-    # heap_notes.sibling_note: a file importing theories of its own directory by bare name gets the
-    # advice to put them into a heap when opening it took at least this long (s), or failed.
-    SIBLING_NOTE_S: float = env_float(_P, "SIBLING_NOTE_S", 60.0)
     # Elapsed seconds at which a long-running command or a timed-out attempt is reminded in the
     # tool result (reminders.py): comma-separated, ascending; empty turns the reminders off.
     REMINDER_S: str = env_str(_P, "REMINDER_S", "30,120,300,600")

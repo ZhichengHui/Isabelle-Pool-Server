@@ -27,7 +27,10 @@ from server.app.errors import (
     SessionLeaseError,
     SessionNotFound,
     SessionStartError,
+    SessionStartTimeout,
 )
+from server.app.services import import_heap
+from server.app.services.import_heap import ImportHeapBuilding, ImportHeapFailed
 from server.app.services.session_manager import SessionManager
 from server.app.services.heap_pool import HeapPool, HeapPoolError
 
@@ -59,6 +62,7 @@ async def lifespan(app: FastAPI):
         shutdown_start = time.time()
         logger.info("application shutdown initiated")
         try:
+            await import_heap.BUILDER.cancel_all()  # no isabelle build outlives the server
             await sm.shutdown()
         finally:
             logger.info(
@@ -156,6 +160,27 @@ async def handle_gateway_unavailable(request: Request, exc: GatewayUnavailable):
         },
         headers={"Retry-After": "10"},
     )
+
+
+@app.exception_handler(SessionStartTimeout)
+async def handle_session_start_timeout(request: Request, exc: SessionStartTimeout):
+    logger.error("session start timed out on %s: %s", request.url.path, exc)
+    return JSONResponse(status_code=504, content={
+        "detail": str(exc), "error": "session_start_timeout"})
+
+
+@app.exception_handler(ImportHeapBuilding)
+async def handle_import_heap_building(request: Request, exc: ImportHeapBuilding):
+    """202: the image the session needs is being built in the background (import_heap.py);
+    the same request later gets the session once it is built."""
+    return JSONResponse(status_code=202, content={**exc.status, "error": "building_import_heap"},
+                        headers={"Retry-After": "15"})
+
+
+@app.exception_handler(ImportHeapFailed)
+async def handle_import_heap_failed(request: Request, exc: ImportHeapFailed):
+    logger.warning("import heap build failed on %s: %s", request.url.path, exc)
+    return JSONResponse(status_code=422, content={**exc.status, "error": "import_heap_failed"})
 
 
 @app.exception_handler(SessionStartError)

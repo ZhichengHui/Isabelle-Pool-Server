@@ -11,7 +11,7 @@ from server.repl.src.python.thy_init import ThyInit
 from server.app.core.config import Memory, Server, Timeouts
 from server.app.core.logging import get_logger, logging_context
 from server.app.core import metrics
-from server.app.errors import GatewayUnavailable, PoolExhausted, SessionBusyError, SessionNotFound, SessionStartError, raise_if_image_not_current
+from server.app.errors import GatewayUnavailable, PoolExhausted, SessionBusyError, SessionNotFound, SessionStartError, SessionStartTimeout, raise_if_image_not_current
 from server.app.services.backend_reaper import BackendReaperMixin
 from server.app.services.memory_monitor import MemoryMonitor
 from server.app.services.fill_sorries import FillJobMixin
@@ -270,10 +270,8 @@ class SessionManager(SessionManagerHelpersMixin, MemoryPolicyMixin, FillJobMixin
                     "session backend creation timed out after %.0fs (gateway wedged?)",
                     Timeouts.SESSION_CREATE,
                 )
-                raise GatewayUnavailable(
-                    f"{where}: session creation timed out after "
-                    f"{Timeouts.SESSION_CREATE:.0f}s — gateway unresponsive"
-                ) from None
+                raise SessionStartTimeout(f"{where}: starting the session took longer than "
+                                          f"{Timeouts.SESSION_CREATE:.0f}s; it was stopped") from None
             except Exception as e:
                 raise_if_image_not_current(e)  # the image must be built first: 409, no stack trace
                 logger.exception("failed to create raw backend for session_id=%s", session_id)

@@ -8,7 +8,6 @@ from typing import List, Optional, Tuple
 from client.async_client import PoolAsyncClient
 
 from .config import Config
-from .heap_notes import heap_note
 from .project_sessions import project_context
 from .sibling_imports import master_dir_of, resolve_sibling_imports, sibling_imports as _sibling_imports
 
@@ -75,29 +74,14 @@ async def file_context(
     project (project_sessions.py) give its ROOT directories and the image it builds on, else
     field_for(the server's suggestion); then the server may switch to an up-to-date image that
     already contains the imported theories (image_select.py)."""
-    imports, field, dirs, _ = await file_context_note(client, text, file_path, heap_session)
-    return imports, field, dirs
-
-
-async def file_context_note(
-    client: PoolAsyncClient, text: str, file_path: str, heap_session: Optional[str] = None,
-    task_group: Optional[str] = None,
-) -> Tuple[List[str], str, Tuple[str, ...], Optional[str]]:
-    """file_context plus the heap note (heap_notes.py) when the session will load imported
-    theories from source because no usable heap contains them; None otherwise."""
     imports, suggested = await header_fields(client, text, master_dir_of(file_path))
     if heap_session:  # a heap-pool session has its own image and directories
-        return imports, field_for(suggested), (), None
+        return imports, field_for(suggested), ()
     field, dirs = project_context(imports, file_path) if Config.PROJECT_SESSIONS else (None, ())
     field = field_for(suggested) if field is None else field
-    note: Optional[str] = None
     if Config.SELECT_FIELD and imports:
         try:
-            sel = await client.select_image(imports, field, list(dirs))
-            field = sel.get("field") or field
-            note = heap_note(sel.get("from_source") or [], sel.get("stale") or [], dirs,
-                             task_group or Config.DEFAULT_TASK_GROUP,
-                             field_stale=bool(sel.get("field_stale")))
+            field = await client.select_field(imports, field, list(dirs)) or field
         except Exception as e:  # an older server without the endpoint: keep the field
             logger.debug("select_field unavailable: %s", e)
-    return imports, field, dirs, note
+    return imports, field, dirs

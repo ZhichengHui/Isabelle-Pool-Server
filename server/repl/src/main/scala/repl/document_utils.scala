@@ -26,13 +26,18 @@ object Document_Utils {
    *  imports against the node's directory (Command.blobs_info, Resources.check_thy), so a
    *  bare `imports A` then names `master_dir/A.thy`, as in `isabelle build`. Without one the
    *  node is a Draft name with no directory (the former behaviour). */
-  def thy_node_name(thy_name: String, master_dir: String = ""): Document.Node.Name = {
-    if (master_dir.nonEmpty)
-      Document.Node.Name(master_dir.stripSuffix("/") + "/" + thy_name + ".thy", theory = thy_name)
-    else {
-      val qualifier = Sessions.DRAFT
-      Document.Node.Name(s"$qualifier.$thy_name", theory = thy_name)
+  def thy_node_name(
+      thy_name: String, master_dir: String = "", qualifier: String = Sessions.DRAFT
+  ): Document.Node.Name = {
+    if (master_dir.nonEmpty) {
+      // On a heap generated for the file's imports (qualifier = that session) the theory is
+      // `<session>.<name>`: PIDE resolves the header's imports with the node's own qualifier
+      // (Resources.check_thy), and a sibling file the session owns may only be imported under it
+      // ("Bad theory import" otherwise). Draft documents keep their bare name, as before.
+      val theory = if (qualifier == Sessions.DRAFT) thy_name else s"$qualifier.$thy_name"
+      Document.Node.Name(master_dir.stripSuffix("/") + "/" + thy_name + ".thy", theory = theory)
     }
+    else Document.Node.Name(s"$qualifier.$thy_name", theory = thy_name)
   }
 
   /** Fresh snapshot of the node: waits only until the session is STABLE (no pending
