@@ -40,6 +40,7 @@ from ..common import (  # noqa: F401  (is_not_found re-exported)
 )
 from . import lease_renewal
 from .config import Config
+from .heap_notes import join_notes, sibling_note
 from .sibling_imports import (  # noqa: F401  (re-exported)
     master_dir_of, resolve_sibling_imports, sibling_imports as _sibling_imports,
 )
@@ -149,6 +150,10 @@ class LspPool(GymClientMixin):
         # session_dirs only when the file imports its project's sessions: every other
         # acquire is exactly what it was before (and works with clients without the key).
         extra = {"session_dirs": list(session_dirs)} if session_dirs else {}
+        # Theories of the file's own directory imported by bare name (absolute paths here) are
+        # checked from source by every acquire; heap_notes.sibling_note when that was slow.
+        siblings = [i for i in imports or () if i.startswith("/")]
+        started = time.monotonic()
         try:
             resp = await c.acquire_session(
                 theories=imports, field=field, reuse_dirty=False,
@@ -157,9 +162,14 @@ class LspPool(GymClientMixin):
         except Exception as e:
             # A load from source that outlives the server's budget fails here; the guard puts
             # the note into the error result instead of a bare "retry" (common/guard.py).
-            if note:
-                setattr(e, "agent_note", note)
+            failed_note = join_notes(note, sibling_note(
+                siblings, field, group, time.monotonic() - started, failed=True))
+            if failed_note:
+                setattr(e, "agent_note", failed_note)
             raise
+        elapsed = time.monotonic() - started
+        if elapsed >= Config.SIBLING_NOTE_S:
+            note = join_notes(note, sibling_note(siblings, field, group, elapsed, failed=False))
         binding = FileBinding(
             file_path=canon,
             session_id=resp["session_id"],

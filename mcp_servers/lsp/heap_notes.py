@@ -8,9 +8,17 @@ facts (POST /api/v1/select_field: `from_source`, `stale`); this module words the
 or rebuilding is advised only for sessions of the file's own project (a ROOT in its repository):
 those the agent can build, with isabelle_build_heap on the directory of that ROOT. Out-of-date
 heaps of other sessions (a shared library) are named, with the advice to report, not rebuild.
+The directories named in that advice passed the server's ISABELLE_HEAP_POOL_ALLOWED_ROOTS check
+already: POST /api/v1/select_field validates `session_dirs` with the same validate_project_path that
+isabelle_build_heap applies, and refuses the request (no note) otherwise.
+
+Theories of the file's own directory imported by bare name (`imports B`) are in no session, so no
+heap can hold them: every open checks them from source. When an open was slow (Config
+.SIBLING_NOTE_S) or failed, sibling_note advises putting them into a session and building its heap.
 """
 from __future__ import annotations
 
+import os
 from typing import Dict, List, Optional, Sequence
 
 from .project_sessions import session_parents
@@ -67,3 +75,38 @@ def heap_note(from_source: Sequence[str], stale: Sequence[str], dirs: Sequence[s
     return (f"No heap contains the theories this file imports, {loading}. Build a heap for them "
             f"with {calls}, then reopen this file; opening it then takes under a minute. Rebuild "
             "the heap each time you change those theories.")
+
+
+def sibling_note(siblings: Sequence[str], parent: str, task_group: str, elapsed_s: float,
+                 failed: bool) -> Optional[str]:
+    """The advice for a file whose imports name theories of its own directory (`siblings`: their
+    absolute paths without .thy, as resolve_sibling_imports gives them) after an open that took
+    `elapsed_s` seconds (`failed`: it did not finish). `parent` is the image the session started on,
+    the parent the new session needs."""
+    if not siblings:
+        return None
+    names = [os.path.basename(s) for s in siblings]
+    directory = os.path.dirname(siblings[0])
+    shown = ", ".join(names)
+    outcome = f"failed after {elapsed_s:.0f} s" if failed else f"took {elapsed_s:.0f} s"
+    sub = os.path.join(directory, "<Name>")
+    return (
+        f"This file imports theories of its own directory by bare name ({shown}). They belong to "
+        "no session, so no heap can hold them, and every open of this file checks them from "
+        f"source again (this open {outcome}). If they change rarely, put them into a heap: move "
+        f"{shown} (and the theories of {directory} they import) into a new subdirectory {sub}, "
+        f'add a ROOT file there with `session <Name> = "{parent}" + theories {" ".join(names)}`, '
+        f'import them qualified in this file (`"<Name>.{names[0]}"` instead of `{names[0]}`), '
+        f'build the heap with isabelle_build_heap(task_group="{task_group}", project="{sub}", '
+        f'session_name="<Name>"), and open this file with isabelle_open(file_path, '
+        f'task_group="{task_group}", heap_session="<Name>"). <Name> must differ from every other '
+        "session and from the other heaps of this task group. Keep this file outside that "
+        "subdirectory: every .thy file in it belongs to the heap. Rebuild the heap each time you "
+        "change those theories."
+    )
+
+
+def join_notes(*notes: Optional[str]) -> Optional[str]:
+    """The notes that are there, one after the other; None when there are none."""
+    present = [n for n in notes if n]
+    return " ".join(present) if present else None

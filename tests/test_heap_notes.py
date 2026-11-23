@@ -143,3 +143,88 @@ def test_a_successful_open_shows_the_note_once(tmp_path, monkeypatch):
     first = json.loads(server._attach_still_running(json.dumps({"ok": True}), "/x/A.thy"))
     second = json.loads(server._attach_still_running(json.dumps({"ok": True}), "/x/A.thy"))
     assert first["heap_note"] == "No heap contains ..." and "heap_note" not in second
+
+
+# ----- theories of the file's own directory, imported by bare name -----
+
+from mcp_servers.lsp.heap_notes import join_notes, sibling_note  # noqa: E402
+
+
+def test_sibling_note_gives_the_steps_with_the_real_names():
+    note = sibling_note(["/w/proj/B", "/w/proj/C"], "AutoCorrode", "g", 312.4, failed=False)
+    assert "by bare name (B, C)" in note and "this open took 312 s" in note
+    # the layout verified live (2026-11-23): theories in their own subdirectory, the file outside
+    # it (in the same directory the heap-session wrapper imports the file itself: cyclic dependency)
+    assert "move B, C (and the theories of /w/proj they import) into a new subdirectory " \
+           "/w/proj/<Name>" in note
+    assert 'ROOT file there with `session <Name> = "AutoCorrode" + theories B C`' in note
+    assert '`"<Name>.B"` instead of `B`' in note
+    assert 'isabelle_build_heap(task_group="g", project="/w/proj/<Name>", session_name="<Name>")' \
+           in note
+    assert 'isabelle_open(file_path, task_group="g", heap_session="<Name>")' in note
+    assert "Keep this file outside that subdirectory" in note
+    assert "other heaps of this task group" in note  # two heaps of one name: neither resolves
+
+
+def test_sibling_note_on_failure_and_without_siblings():
+    assert "this open failed after 600 s" in sibling_note(["/w/B"], "HOL", "g", 600, failed=True)
+    assert sibling_note([], "HOL", "g", 600, failed=True) is None
+
+
+def test_join_notes():
+    assert join_notes(None, None) is None
+    assert join_notes("a", None, "b") == "a b"
+
+
+def _pool_with(monkeypatch, tmp_path, acquire, note=None):
+    """An LspPool whose client answers `acquire`, for a file importing its sibling B."""
+    from mcp_servers.lsp import pool as pool_mod
+
+    (tmp_path / "A.thy").write_text('theory A imports B begin end')
+    (tmp_path / "B.thy").write_text('theory B imports Main begin end')
+    sib = str(tmp_path / "B")
+
+    async def ctx(c, text, canon, heap_session, group):
+        return [sib], "HOL", (), note
+
+    class Client:
+        acquire_session = acquire
+
+    p = pool_mod.LspPool()
+
+    async def client():
+        return Client()
+
+    monkeypatch.setattr(p, "client", client)
+    monkeypatch.setattr(pool_mod, "file_context_note", ctx)
+    monkeypatch.setattr(pool_mod.lease_renewal, "ensure", lambda pool: None)
+    return p, str(tmp_path / "A.thy")
+
+
+def test_a_slow_open_with_siblings_gets_the_sibling_note(monkeypatch, tmp_path):
+    from mcp_servers.lsp import pool as pool_mod
+
+    async def acquire(self, **kw):
+        return {"session_id": "s", "lease_id": "l"}
+
+    p, f = _pool_with(monkeypatch, tmp_path, acquire)
+    monkeypatch.setattr(pool_mod.Config, "SIBLING_NOTE_S", 0.0)
+    b = asyncio.run(p._create_binding(f, None, None, None))
+    assert "by bare name (B)" in b.heap_note and "this open took" in b.heap_note
+    monkeypatch.setattr(pool_mod.Config, "SIBLING_NOTE_S", 3600.0)
+    b = asyncio.run(p._create_binding(f, None, None, None))
+    assert b.heap_note is None  # a fast open: no note
+
+
+def test_a_failed_open_with_siblings_carries_both_notes(monkeypatch, tmp_path):
+    async def acquire(self, **kw):
+        raise httpx.ReadTimeout("timed out")
+
+    p, f = _pool_with(monkeypatch, tmp_path, acquire, note="No heap contains X.")
+    try:
+        asyncio.run(p._create_binding(f, None, None, None))
+    except httpx.ReadTimeout as e:
+        assert e.agent_note.startswith("No heap contains X. This file imports theories")
+        assert "this open failed after" in e.agent_note
+    else:
+        raise AssertionError("the failure must propagate")
