@@ -7,9 +7,16 @@ database `log/<session>.db` of each image records both: the exports of its theor
 heaps). The proposed field is kept when it covers the imports and is up to date; otherwise the
 smallest up-to-date image that covers them is chosen; when none does, the proposed field stays.
 Up to date means `isabelle build -n -b` (no build) succeeds for it, with the session directories
-the session will use. That check takes seconds and is run on every call: it is not cached, because a
-cache keyed on the image file misses edits to the image's source theories (the image file does not
-change when they do), and then a stale image is chosen and the session start fails.
+the session will use. That check takes seconds (6 s for HOL, 20 s for AutoCorrode), so its result is
+cached, and the cache key is every input the check reads that can change under a running server:
+the image files of the session and of its input heaps, every source file their build databases list
+(`isabelle_session_info.sources`), the nearest ROOT above each source directory (a ROOT edit only
+shows in the `<meta_info>` digest), and ROOTS, etc/settings and etc/preferences of the user home,
+each as (mtime_ns, size). A change to any of them runs the check again; Isabelle stays the judge of
+"up to date". When an input cannot be located (no build database, an unknown path variable, an input
+heap that is not an image here), nothing is cached and the check runs on every call. A key on the
+image file alone (before 2026-11-23) missed edits to the sources: the stale image was chosen for up
+to 10 minutes and the session start failed with image_not_current.
 """
 from __future__ import annotations
 
@@ -26,15 +33,20 @@ _QUALIFIED = re.compile(r'^"?([A-Za-z0-9_+\-]+\.[A-Za-z0-9_\'.]+)"?$')
 _lock = threading.Lock()
 _env: Optional[Dict[str, str]] = None
 _theories: Dict[Tuple[str, float], Set[str]] = {}
+_ENV_VARS = ("ISABELLE_HEAPS", "ISABELLE_HEAPS_SYSTEM", "ML_SYSTEM",
+             "ISABELLE_HOME", "ISABELLE_HOME_USER", "USER_HOME")
+_USER_FILES = ("ROOTS", "etc/settings", "etc/preferences")
+Stat = Optional[Tuple[int, int]]
+_current: Dict[Tuple[str, Tuple[str, ...]], Tuple[tuple, bool]] = {}
 
 
 def _getenv() -> Dict[str, str]:
     global _env
     if _env is None:
         out = subprocess.run(
-            [_isabelle(), "getenv", "-b", "ISABELLE_HEAPS", "ISABELLE_HEAPS_SYSTEM", "ML_SYSTEM"],
+            [_isabelle(), "getenv", "-b", *_ENV_VARS],
             capture_output=True, text=True, timeout=60, check=True).stdout
-        _env = dict(zip(("ISABELLE_HEAPS", "ISABELLE_HEAPS_SYSTEM", "ML_SYSTEM"), out.splitlines()))
+        _env = dict(zip(_ENV_VARS, out.splitlines()))
     return _env
 
 
@@ -80,13 +92,111 @@ def theories(name: str, imgs: Dict[str, Path]) -> Set[str]:
     return _theories[key]
 
 
-def current(name: str, dirs: Tuple[str, ...]) -> bool:
-    """`isabelle build -n -b` succeeds for `name` (not cached; see the module docstring)."""
+def _stat(path: Path) -> Stat:
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+def _db_inputs(image: Path) -> Optional[Tuple[List[str], List[str]]]:
+    """Source paths (as Isabelle writes them) and input heap names from the build database."""
+    db = image.parent / "log" / f"{image.name}.db"
+    if not db.is_file():
+        return None
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            row = con.execute("select sources, input_heaps from isabelle_session_info").fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return None
+    if not row:
+        return None
+    text = [v.decode() if isinstance(v, bytes) else (v or "") for v in row]
+    sources = [ln.split(" ", 1)[1] for ln in text[0].splitlines() if " " in ln]
+    inputs = [ln.split()[-1] for ln in text[1].splitlines() if ln.split()]
+    return sources, inputs
+
+
+def _resolve(source: str, env: Dict[str, str]) -> Optional[Path]:
+    """A source path of a build database as a file (`~~`, `~`, `$VAR`, absolute); None if unknown."""
+    if source.startswith("~~/"):
+        base, rest = env.get("ISABELLE_HOME"), source[3:]
+    elif source.startswith("~/"):
+        base, rest = env.get("USER_HOME"), source[2:]
+    elif source.startswith("$"):
+        var, _, rest = source[1:].partition("/")
+        base = env.get(var)
+    elif source.startswith("/"):
+        return Path(source)
+    else:
+        return None
+    return Path(base) / rest if base else None
+
+
+def _nearest_root(d: Path) -> Optional[Path]:
+    for q in (d, *d.parents):
+        if (q / "ROOT").is_file():
+            return q / "ROOT"
+    return None
+
+
+def _inputs_key(name: str, imgs: Dict[str, Path], env: Dict[str, str],
+                seen: Set[str]) -> Optional[tuple]:
+    """The state of every input of the up-to-date check of `name` (module docstring); None when
+    one of them cannot be located."""
+    db = _db_inputs(imgs[name])
+    if db is None:
+        return None
+    sources, inputs = db
+    parts: List[tuple] = [(str(imgs[name]), _stat(imgs[name]))]
+    roots: Dict[Path, Optional[Path]] = {}
+    for source in sources:
+        if source.startswith("<"):  # <meta_info>, <build_prefs:...>: digests, no file
+            continue
+        path = _resolve(source, env)
+        if path is None:
+            return None
+        parts.append((str(path), _stat(path)))
+        if path.parent not in roots:
+            roots[path.parent] = _nearest_root(path.parent)
+    parts.extend((str(r), _stat(r)) for r in sorted(set(filter(None, roots.values()))))
+    for parent in inputs:
+        if parent.startswith("<"):  # Pure lists `<meta_info>` among its input heaps
+            continue
+        if parent not in imgs:
+            return None
+        if parent in seen:
+            continue
+        seen.add(parent)
+        sub = _inputs_key(parent, imgs, env, seen)
+        if sub is None:
+            return None
+        parts.append(sub)
+    return tuple(parts)
+
+
+def current(name: str, imgs: Dict[str, Path], dirs: Tuple[str, ...]) -> bool:
+    """`isabelle build -n -b` succeeds for `name`; cached while its inputs are unchanged."""
+    env = _getenv()
+    key = _inputs_key(name, imgs, env, {name})
+    home_user = env.get("ISABELLE_HOME_USER")
+    if key is not None and home_user:
+        key += tuple((f, _stat(Path(home_user) / f)) for f in _USER_FILES)
+    hit = _current.get((name, dirs))
+    if key is not None and hit and hit[0] == key:
+        return hit[1]
     cmd = [_isabelle(), "build", "-n", "-b"] + [a for d in dirs for a in ("-d", d)] + [name]
     try:
-        return subprocess.run(cmd, capture_output=True, timeout=300).returncode == 0
+        ok = subprocess.run(cmd, capture_output=True, timeout=300).returncode == 0
     except subprocess.TimeoutExpired:
-        return False
+        ok = False
+    if key is not None:
+        _current[(name, dirs)] = (key, ok)
+    return ok
 
 
 def select_field(imports: List[str], field: Optional[str], dirs: Tuple[str, ...] = ()) -> Optional[str]:
@@ -97,9 +207,9 @@ def select_field(imports: List[str], field: Optional[str], dirs: Tuple[str, ...]
     with _lock:
         imgs = images()
         covering = [s for s in imgs if wanted <= theories(s, imgs)]
-        if field in covering and current(field, dirs):
+        if field in covering and current(field, imgs, dirs):
             return field
         for s in sorted(covering, key=lambda s: len(theories(s, imgs))):
-            if s != field and current(s, dirs):
+            if s != field and current(s, imgs, dirs):
                 return s
     return field
