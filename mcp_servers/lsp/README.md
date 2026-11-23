@@ -138,6 +138,8 @@ parser (client wrapper: `async_client.parse_theory_header`).
 | `..._FILL_PATIENCE_S` / `..._FILL_POLL_S` | 240 / 3 | how long `isabelle_fill_sorries` waits before returning `continuing: true` (keep ≤ the MCP client's tool timeout − 60) / poll interval |
 | `..._TRANSPORT` | `stdio` | `stdio` or `streamable-http` |
 | `..._HOST` / `..._PORT` | `127.0.0.1` / `8849` | streamable-http bind |
+| `..._STATELESS_HTTP` | false | streamable-http without MCP session ids: a client needs no re-initialize after a dropped connection or a restart of this process (no tool keeps per-client state) |
+| `..._IDLE_RELEASE_S` | 0 | release open files and close warm scratch sessions unused this long (s); for a resident streamable-http server shared by clients that come and go, which never exits and so would otherwise renew an ended client's leases forever (0 = off; a stdio server ends with its client) |
 
 ## Run
 
@@ -146,6 +148,13 @@ pip install -e ".[mcp]" -e ./client   # from the repo root: MCP SDK (mcp<2) + th
 PYTHONPATH=. python -m mcp_servers.lsp.app                                   # stdio
 ISABELLE_MCP_LSP_TRANSPORT=streamable-http PYTHONPATH=. python -m mcp_servers.lsp.app   # HTTP on :8849
 ```
+
+Resident on a remote machine (the client reaches it through an ssh port forward): run it once with
+`ISABELLE_MCP_LSP_TRANSPORT=streamable-http ISABELLE_MCP_LSP_STATELESS_HTTP=true
+ISABELLE_MCP_LSP_IDLE_RELEASE_S=1800` and point the client at `http://127.0.0.1:<forwarded port>/mcp`
+(Claude Code: `"type": "http"`). A dropped forward fails only the request in flight; the process and
+the files it holds stay, and Claude Code reconnects on its own once the forward is back. Over stdio
+through ssh, by contrast, the process ends with the connection and every open file is lost.
 
 ## Notes / deferrals (v1)
 

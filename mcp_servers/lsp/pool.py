@@ -38,7 +38,7 @@ from ..common import (  # noqa: F401  (is_not_found re-exported)
     SessionRegistry,
     is_not_found,
 )
-from . import lease_renewal
+from . import idle_release, lease_renewal
 from .config import Config
 from .heap_notes import join_notes, sibling_note
 from .sibling_imports import (  # noqa: F401  (re-exported)
@@ -195,6 +195,7 @@ class LspPool(GymClientMixin):
             heap_note=note,
         )
         lease_renewal.ensure(self)
+        idle_release.ensure(self)
         self.registry.register(
             binding.session_id,
             binding.lease_id,
@@ -220,6 +221,10 @@ class LspPool(GymClientMixin):
         if binding is not None:
             self.registry.touch(binding.session_id)
         return binding
+
+    def peek_binding_quiet(self, file_path: str) -> Optional[FileBinding]:
+        """The binding for a file, without touching its idle clock (idle_release.py)."""
+        return self._bindings.get(canonical_path(file_path))
 
     async def get_binding(
         self, file_path: str, task_group: Optional[str] = None,
@@ -466,6 +471,7 @@ class LspPool(GymClientMixin):
                 label=f"scratch:{task_group}:{heap_session or 'plain'}",
             )
             lease_renewal.ensure(self)
+            idle_release.ensure(self)
             self.registry.register(
                 resp["session_id"],
                 resp["lease_id"],

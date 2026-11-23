@@ -85,3 +85,15 @@ class Config:
     TRANSPORT: str = env_str(_P, "TRANSPORT", "stdio")
     HOST: str = env_str(_P, "HOST", "127.0.0.1")
     PORT: int = env_int(_P, "PORT", 8849)
+    # streamable-http only: serve every request on its own, without an MCP session id
+    # (no tool uses per-client state). A client then needs no re-initialize when the
+    # connection or this process restarts: its next request simply works.
+    STATELESS_HTTP: bool = env_bool(_P, "STATELESS_HTTP", False)
+
+    # A resident MCP (streamable-http, shared by many clients that come and go) never
+    # exits, so "the MCP died, its leases lapse" no longer frees what an ended client
+    # left open. With this > 0, a background task releases every open file and closes
+    # every warm scratch session not used for this many seconds (idle_release.py);
+    # the next file-scoped call reopens a released file. 0 disables (stdio default:
+    # there the process ends with its client).
+    IDLE_RELEASE_S: float = env_float(_P, "IDLE_RELEASE_S", 0.0)
