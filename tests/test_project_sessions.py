@@ -79,10 +79,10 @@ def test_file_context_asks_the_server_for_the_start_image(tmp_path):
         async def parse_theory_header(self, text):
             return {"imports": ["Lib.A"], "suggested_field": "Lib"}
 
-        async def select_field(self, imports, field, dirs):
+        async def select_image(self, imports, field, dirs):
             if self.answer is None:
                 raise RuntimeError("404")  # an older server
-            return self.answer
+            return {"field": self.answer}
 
     f = str(tmp_path / "T.thy")
     assert asyncio.run(file_context(Client("Big"), "", f))[1] == "Big"

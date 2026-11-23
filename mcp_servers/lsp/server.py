@@ -119,7 +119,10 @@ def _attach_still_running(out: Any, file_path: Any) -> Any:
         return out
     binding = pool.peek_binding(file_path)
     running = pool.running_commands(binding) if binding is not None else []
-    if not running:
+    note = None
+    if binding is not None and not getattr(binding, "heap_note_shown", False):
+        note = getattr(binding, "heap_note", None)
+    if not running and not note:
         return out
     try:
         result = json.loads(out)
@@ -127,6 +130,11 @@ def _attach_still_running(out: Any, file_path: Any) -> Any:
         return out
     if not isinstance(result, dict):
         return out
+    if note:  # the first result after the binding was made: why the open was slow (heap_notes.py)
+        result["heap_note"] = note
+        binding.heap_note_shown = True
+    if not running:
+        return dump_json(result)
     for cmd in running:
         r = reminder(cmd["running_for_s"], f"the command at line {cmd['line']} ({cmd['kind']})")
         if r:

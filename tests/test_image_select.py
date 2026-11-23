@@ -57,6 +57,15 @@ def test_switches_to_the_smallest_current_covering_image(heaps):
     assert m.select_field(["Lib.A"], "Lib") == "Big"
 
 
+def test_selection_reports_what_loads_from_source_and_the_stale_images(heaps):
+    assert m.selection(["Lib.A"], "HOL") == {"field": "Lib", "from_source": [], "stale": []}
+    heaps.update({"Lib", "Big"})  # both images that hold Lib.A are out of date
+    assert m.selection(["Lib.A", "Main"], "HOL") == {
+        "field": "HOL", "from_source": ["Lib.A"], "stale": ["Lib", "Big"]}
+    assert m.selection(["Own.T"], "HOL") == {"field": "HOL", "from_source": ["Own.T"], "stale": []}
+    assert m.selection(["Main"], "HOL") == {"field": "HOL", "from_source": [], "stale": []}
+
+
 def test_keeps_the_field_when_nothing_covers(heaps):
     assert m.select_field(["Main"], "HOL") == "HOL"  # unqualified: no selection
     assert m.select_field(["Own.T"], "Big") == "Big"  # a theory in no image

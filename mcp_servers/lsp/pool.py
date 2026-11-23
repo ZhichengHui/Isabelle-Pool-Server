@@ -44,7 +44,7 @@ from .sibling_imports import (  # noqa: F401  (re-exported)
     master_dir_of, resolve_sibling_imports, sibling_imports as _sibling_imports,
 )
 from .header_context import (  # noqa: F401  (re-exported)
-    field_for, file_context, header_fields, header_imports, header_text,
+    field_for, file_context, file_context_note, header_fields, header_imports, header_text,
 )
 
 
@@ -73,6 +73,9 @@ class FileBinding:
     # across incremental syncs).
     running_since: Dict[Tuple[Any, Any], float] = field(default_factory=dict)
     spare_scheduled: bool = False  # scratch_spare.schedule_for_binding ran for this binding
+    # heap_notes.py: why this file's imports load from source and what to build; shown once
+    heap_note: Optional[str] = None
+    heap_note_shown: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
@@ -124,8 +127,10 @@ class LspPool(GymClientMixin):
                 text = f.read()
         except OSError:
             text = None
+        note: Optional[str] = None
         if text is not None:
-            imports, field, session_dirs = await file_context(c, text, canon, heap_session)
+            imports, field, session_dirs, note = await file_context_note(
+                c, text, canon, heap_session, group)
             imports = imports or None
         # Acquire (not create): sessions released by other bindings with the
         # same dependency key (task_group + heap / imports, default field)
@@ -144,16 +149,24 @@ class LspPool(GymClientMixin):
         # session_dirs only when the file imports its project's sessions: every other
         # acquire is exactly what it was before (and works with clients without the key).
         extra = {"session_dirs": list(session_dirs)} if session_dirs else {}
-        resp = await c.acquire_session(
-            theories=imports, field=field, reuse_dirty=False,
-            task_group=group, heap_session=heap_session, label=label or canon, **extra,
-        )
+        try:
+            resp = await c.acquire_session(
+                theories=imports, field=field, reuse_dirty=False,
+                task_group=group, heap_session=heap_session, label=label or canon, **extra,
+            )
+        except Exception as e:
+            # A load from source that outlives the server's budget fails here; the guard puts
+            # the note into the error result instead of a bare "retry" (common/guard.py).
+            if note:
+                setattr(e, "agent_note", note)
+            raise
         binding = FileBinding(
             file_path=canon,
             session_id=resp["session_id"],
             lease_id=resp["lease_id"],
             task_group=group,
             heap_session=heap_session,
+            heap_note=note,
         )
         lease_renewal.ensure(self)
         self.registry.register(

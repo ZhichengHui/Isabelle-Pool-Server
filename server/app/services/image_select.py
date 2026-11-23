@@ -25,7 +25,7 @@ import sqlite3
 import subprocess
 import threading
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from server.app.services.heap_pool import default_isabelle as _isabelle
 
@@ -199,17 +199,28 @@ def current(name: str, imgs: Dict[str, Path], dirs: Tuple[str, ...]) -> bool:
     return ok
 
 
-def select_field(imports: List[str], field: Optional[str], dirs: Tuple[str, ...] = ()) -> Optional[str]:
-    """The image to start on for `imports` (see the module docstring)."""
+def selection(imports: List[str], field: Optional[str], dirs: Tuple[str, ...] = ()) -> Dict[str, Any]:
+    """The image to start on for `imports` (see the module docstring), as {field, from_source,
+    stale}: `from_source` are the qualified imports the chosen image does not contain (the session
+    loads them from source), `stale` the images that contain all of them but are out of date (a
+    source changed after the build; empty when one is chosen)."""
     wanted = {m.group(1) for m in (_QUALIFIED.match(i) for i in imports) if m}
     if not wanted:
-        return field
+        return {"field": field, "from_source": [], "stale": []}
+    stale: List[str] = []
     with _lock:
         imgs = images()
         covering = [s for s in imgs if wanted <= theories(s, imgs)]
-        if field in covering and current(field, imgs, dirs):
-            return field
-        for s in sorted(covering, key=lambda s: len(theories(s, imgs))):
-            if s != field and current(s, imgs, dirs):
-                return s
-    return field
+        candidates = ([field] if field in covering else []) + [
+            s for s in sorted(covering, key=lambda s: len(theories(s, imgs))) if s != field]
+        for s in candidates:
+            if current(s, imgs, dirs):
+                return {"field": s, "from_source": [], "stale": []}
+            stale.append(s)
+        have = theories(field, imgs) if field in imgs else set()
+    return {"field": field, "from_source": sorted(wanted - have), "stale": stale}
+
+
+def select_field(imports: List[str], field: Optional[str], dirs: Tuple[str, ...] = ()) -> Optional[str]:
+    """The image to start on for `imports` (see the module docstring)."""
+    return selection(imports, field, dirs)["field"]
