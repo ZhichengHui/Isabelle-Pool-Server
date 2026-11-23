@@ -2,6 +2,7 @@
 
     client       -> nothing in this repo (httpx only)
     mcp_*        -> client only
+    pool_cli     -> client and mcp_servers (the shell client reuses the MCP header logic)
     server       -> nothing in client / mcp_* / evaluation / archive
     evaluation   -> client only (never server / repl / archive)
 
@@ -25,6 +26,7 @@ FORBIDDEN = {
     "mcp_servers": {"server", "repl", "evaluation", "archive"},
     "server": {"client", "evaluation", "archive"} | _MCP_PKGS,
     "evaluation": {"server", "repl", "archive", "mcp_servers"},
+    "pool_cli": {"server", "repl", "evaluation", "archive"},
 }
 
 
