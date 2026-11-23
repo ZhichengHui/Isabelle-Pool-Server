@@ -177,6 +177,7 @@ class Repl_Session(session_manager: Session_Manager, initial_thys: List[String] 
       }
     )
     if (master_dir.nonEmpty) thy_info.master_dir = master_dir
+    thy_info.qualifier = Edit_Utils.document_qualifier(field)
     current_thy_info = Some(thy_info)
     set_current_required(true)
   }

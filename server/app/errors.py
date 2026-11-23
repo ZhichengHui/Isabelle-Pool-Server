@@ -77,6 +77,11 @@ class GatewayUnavailable(SessionError):
     pass
 
 
+class SessionStartTimeout(SessionError):
+    """Starting a session's prover took longer than Timeouts.SESSION_CREATE. Not a gateway fault:
+    the gateway answered; the session's own start (loading imports from source) was too slow."""
+
+
 class PoolExhausted(SessionError):
     """Raised when the session pool is full and all sessions are actively
     processing requests, so no eviction candidate is available."""

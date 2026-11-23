@@ -238,6 +238,28 @@ def translate_http_error(  # pylint: disable=too-many-arguments
                 f"need ({tools.release_idle}) and retry in {retry} s."
             ],
         }
+    if status == 504 and error == "session_start_timeout":
+        return {
+            "error": "session_start_timeout",
+            "detail": info["detail"],
+            "advice": [
+                "Starting the prover session for this file took longer than the server allows "
+                "(it was loading the file's imports from source) and was stopped. Calling again "
+                "starts over; if it happens again, tell the user."
+            ],
+        }
+    if status == 422 and error == "import_heap_failed":
+        body = info["body"] or {}
+        return {
+            "error": "import_heap_failed",
+            "session": body.get("session"),
+            "log_tail": body.get("log_tail"),
+            "advice": [
+                "Building the heap for this file's imports failed: `log_tail` is the end of "
+                "the `isabelle build` output. Fix the error in the imported theory it names; "
+                "the next call on this file builds again."
+            ],
+        }
     if status == 409 and error == "image_not_current":
         return {
             "error": "image_not_current",

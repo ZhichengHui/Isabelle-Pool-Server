@@ -42,6 +42,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from server.app.core.config import Heap, Server
 from server.app.core import metrics
+from server.app.services import build_process
 from server.app.core.input_guards import (
     assert_within,
     find_code_execution,
@@ -377,19 +378,17 @@ class HeapPool:
         logger.info("heap build started group=%s project=%s session=%s", task_group, project, name)
         started = time.time()
         try:
-            proc = await asyncio.create_subprocess_exec(
-                self.isabelle, "build", "-b", "-d", root_dir, name,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=Heap.BUILD_TIMEOUT_S
-            )
-            log = (stdout + stderr).decode("utf-8", errors="replace")
-            ok = proc.returncode == 0
-        except asyncio.TimeoutError:
-            ok = False
-            log = f"isabelle build timed out after {Heap.BUILD_TIMEOUT_S}s"
+            # A process group ended as a whole on timeout (build_process.py): the timeout used to
+            # mark the entry failed and leave `isabelle build` and its poly processes running.
+            log_path = self.state_dir / "_logs" / f"{task_group}-{name}.log"
+            log_path.unlink(missing_ok=True)
+            rc, timed_out = await build_process.run(
+                [self.isabelle, "build", "-b", "-d", root_dir, name], log_path,
+                timeout_s=Heap.BUILD_TIMEOUT_S)
+            log = build_process.tail(log_path)
+            if timed_out:
+                log += f"\nisabelle build timed out after {Heap.BUILD_TIMEOUT_S}s and was stopped"
+            ok = rc == 0 and not timed_out
         except Exception as e:
             ok = False
             log = f"failed to run isabelle build: {e}"

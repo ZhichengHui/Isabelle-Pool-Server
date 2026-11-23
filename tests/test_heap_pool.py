@@ -27,19 +27,24 @@ from server.app.services.heap_pool import (
 
 
 class _FakeProc:
-    def __init__(self, returncode=0, out=b"Build OK\n", delay=0.0):
-        self.returncode = returncode
-        self._out = out
-        self._delay = delay
+    """`isabelle build` as build_process.start runs it: output goes to the log file it is given."""
 
-    async def communicate(self):
+    def __init__(self, returncode=0, delay=0.0):
+        self.returncode = None
+        self._rc = returncode
+        self._delay = delay
+        self.pid = -1
+
+    async def wait(self):
         if self._delay:
             await asyncio.sleep(self._delay)
-        return self._out, b""
+        self.returncode = self._rc
+        return self._rc
 
 
-def _fake_exec(monkeypatch, returncode=0, delay=0.0):
+def _fake_exec(monkeypatch, returncode=0, delay=0.0, out=b"Build OK\n"):
     async def fake(*args, **kwargs):
+        kwargs["stdout"].write(out)
         return _FakeProc(returncode=returncode, delay=delay)
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake)

@@ -17,7 +17,7 @@ import pytest
 
 from server.repl.src.python import repl_backend_gateway as gw_mod
 from server.app.core.config import Timeouts
-from server.app.errors import GatewayUnavailable
+from server.app.errors import GatewayUnavailable, SessionStartTimeout
 from server.app.services.session_manager import SessionManager
 
 
@@ -116,7 +116,8 @@ def test_probe_exception_is_logged_not_swallowed(caplog):
 # ---------------------------------------------------------------- Rec 3: create timeout
 
 def test_backend_creation_wall_timeout(monkeypatch):
-    """A wedged gateway must turn into GatewayUnavailable within the budget."""
+    """A start that runs past the budget fails within it, as a session start timeout (it is
+    not a gateway fault: the gateway answered, the start was slow)."""
     import asyncio
 
     mgr = SessionManager.__new__(SessionManager)
@@ -138,5 +139,5 @@ def test_backend_creation_wall_timeout(monkeypatch):
         return None
 
     monkeypatch.setattr(asyncio, "to_thread", _selective_sleep)
-    with pytest.raises(GatewayUnavailable):
+    with pytest.raises(SessionStartTimeout):
         asyncio.run(mgr._create_session())

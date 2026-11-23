@@ -12,6 +12,7 @@ from server.app.core.config import Heap, Server
 from server.app.core.logging import get_logger, logging_context
 
 from server.app.dependencies import get_session_manager
+from server.app.services import import_heap
 from ..deps import (
     HeapPoolDep,
     LeasedSession,
@@ -78,6 +79,18 @@ def _session_inputs(request, heap_pool):
     return theories, field, task_group, session_dirs, dependency_extra
 
 
+async def _prepared_inputs(request, heap_pool):
+    """_session_inputs, then the image the session needs built first (import_heap.py): raises
+    ImportHeapBuilding (202, progress) while it is built. Heap-pool sessions (heap_session /
+    project) keep their own image."""
+    theories, field, task_group, session_dirs, dependency_extra = _session_inputs(request, heap_pool)
+    if not (request.heap_session or request.project):
+        import_heap.maybe_gc()
+        theories, field, session_dirs, dependency_extra = await import_heap.prepare(
+            theories, field or Server.DEFAULT_FIELD, session_dirs, dependency_extra)
+    return theories, field, task_group, session_dirs, dependency_extra
+
+
 @router.post("/api/v1/sessions", response_model=SessionResponse)
 async def create_session(
     session_manager: SessionManagerDep,
@@ -86,7 +99,8 @@ async def create_session(
 ):
     if request is None:
         request = SessionCreateWithDirsRequest()
-    theories, field, task_group, session_dirs, dependency_extra = _session_inputs(request, heap_pool)
+    theories, field, task_group, session_dirs, dependency_extra = await _prepared_inputs(
+        request, heap_pool)
 
     with logging_context(field=field or "default"):
         logger.info("creating session theories=%s task_group=%s", theories or [], task_group)
@@ -138,7 +152,8 @@ async def acquire_session(
     session_manager: SessionManagerDep,
     heap_pool: HeapPoolDep,
 ):
-    theories, field, task_group, session_dirs, dependency_extra = _session_inputs(request, heap_pool)
+    theories, field, task_group, session_dirs, dependency_extra = await _prepared_inputs(
+        request, heap_pool)
 
     with logging_context(field=field or "default"):
         logger.info(

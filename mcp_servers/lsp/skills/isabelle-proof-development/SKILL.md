@@ -21,9 +21,11 @@ Load a tool with ToolSearch when a rule calls for it; its description says how t
 
 ## Rules
 
-Before the first `isabelle_open`: when the file imports theories of the project that the task
-does not change and opening it takes more than a minute, build those sessions into a heap
-(`isabelle_build_heap`) and open the file on it (`heap_session`).
+Theories the file imports (of its own directory or of the project's sessions) are built into a
+heap by the server, in the background, before the file's session starts. While that runs, a tool
+call on the file answers `building_import_heap` with the progress: work on something else and call
+again a minute or two later. Do not build heaps yourself for this. If the build fails, the result
+is `import_heap_failed` with the end of the build log: fix the imported theory it names.
 
 1. `isabelle_open` the file. After every edit, check it with `isabelle_diagnostic_messages`. After
    an edit of a project theory the file imports, the next call reopens the file with the new version

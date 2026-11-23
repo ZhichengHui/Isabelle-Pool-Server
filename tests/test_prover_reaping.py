@@ -31,7 +31,7 @@ import uuid
 import pytest
 
 from server.app.core.config import Timeouts
-from server.app.errors import GatewayUnavailable
+from server.app.errors import GatewayUnavailable, SessionStartTimeout
 from server.app.services.memory_monitor import read_starttime
 from server.app.services.session_manager import SessionManager
 from server.app.services.session_memory import MemoryAwareSession
@@ -319,7 +319,7 @@ def test_creation_timeout_stops_the_backend_by_tag(monkeypatch):
     monkeypatch.setattr(Timeouts, "SESSION_CREATE", 0.2)
     gw = _SlowFactoryGateway(delay=1.0)
     sm = _manager(gw)
-    with pytest.raises(GatewayUnavailable):
+    with pytest.raises(SessionStartTimeout):
         asyncio.run(sm._create_session(["Main"], "HOL"))
     tag = gw.tags[0]
     assert _wait(lambda: gw.closed == [tag])  # stopped in the JVM by its tag
