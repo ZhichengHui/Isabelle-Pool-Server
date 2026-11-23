@@ -25,7 +25,9 @@ Before the first `isabelle_open`: when the file imports theories of the project 
 does not change and opening it takes more than a minute, build those sessions into a heap
 (`isabelle_build_heap`) and open the file on it (`heap_session`).
 
-1. `isabelle_open` the file. After every edit, check it with `isabelle_diagnostic_messages`.
+1. `isabelle_open` the file. After every edit, check it with `isabelle_diagnostic_messages`. After
+   an edit of a project theory the file imports, the next call reopens the file with the new version
+   by itself (its result says so in `heap_note`): do not close and reopen the file yourself.
 2. Read the goal a step must prove with `isabelle_goal` (`goals_before` at the step's own line, not at the `qed` or `done` after it).
 3. Test a step with `isabelle_multi_attempt` before writing it into the file as part of the proof:
    a step that does not finish blocks every later check and query of the file. `line` is the first
