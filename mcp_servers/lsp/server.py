@@ -38,7 +38,10 @@ then, the result carries still_running with their lines.
 - Inspection: isabelle_query (thm, term, find_theorems, ...), local and global facts, definitions, \
 hover information; checkpoints; memory tools (isabelle_memory_status, isabelle_release_idle)."""
 
-mcp = FastMCP("isabelle-pool-server-lsp", instructions=_INSTRUCTIONS, host=Config.HOST, port=Config.PORT)
+mcp = FastMCP(
+    "isabelle-pool-server-lsp", instructions=_INSTRUCTIONS, host=Config.HOST, port=Config.PORT,
+    stateless_http=Config.STATELESS_HTTP,
+)
 pool = LspPool()
 
 # `_meta` of the tools that Claude Code should load upfront even when it defers MCP tools behind
