@@ -38,6 +38,18 @@ def _gateway_log_dir() -> Path:
     return d
 
 
+def gateway_jvm_args(log_dir: Path) -> list[str]:
+    """JVM options for the gateway, as `isabelle scala` -J arguments. They come after the
+    launcher's ISABELLE_SCALAC_OPTIONS (-J-Xms512m -J-Xmx4g), so they win; the user
+    settings file does not reach this JVM (ISABELLE_TOOL_JAVA_OPTIONS is for tools)."""
+    gc_log = log_dir.resolve() / "gateway-gc-%p.log"
+    return [
+        f"-J-Xms{Repl.GATEWAY_JVM_MIN_HEAP_MB}m",
+        f"-J-Xmx{Repl.GATEWAY_JVM_HEAP_MB}m",
+        f"-J-Xlog:gc*:file={gc_log}:time,uptime,level,tags:filecount=5,filesize=20M",
+    ]
+
+
 EnvStateID = int
 
 
@@ -140,7 +152,7 @@ class ReplBackendGatewayProcess:
         # ends them by it, without the JVM and without trusting recorded pids.
         self.marker = uuid.uuid4().hex
         self.process = subprocess.Popen(
-            [isabelle_executable, "scala", str(repl_gateway_path)],
+            [isabelle_executable, "scala", *gateway_jvm_args(log_dir), str(repl_gateway_path)],
             env={**os.environ, GATEWAY_MARK_KEY: self.marker},
             # Isabelle uses many child processes, so we start a new process group
             preexec_fn=os.setsid,

@@ -133,6 +133,13 @@ class Repl:
     GATEWAY_POLL_INTERVAL: Final    = float(os.getenv("ISABELLE_REPL_GATEWAY_POLL_INTERVAL", "0.1"))
     GATEWAY_POLL_TIMEOUT: Final     = float(os.getenv("ISABELLE_REPL_GATEWAY_POLL_TIMEOUT", "20.0"))
     GATEWAY_TERMINATE_WAIT: Final   = float(os.getenv("ISABELLE_REPL_GATEWAY_TERMINATE_WAIT", "3.0"))
+    # Gateway JVM heap. One JVM holds the PIDE state of EVERY session, and the
+    # `isabelle scala` launcher default (-J-Xmx4g from ISABELLE_SCALAC_OPTIONS)
+    # ran out of heap with 34-64 live sessions (84 gateway restarts 2026-11-18..23,
+    # each dropping all sessions). Passed as -J options after the launcher's own,
+    # so they win. 32 GB is about 330 MB per session at 96 sessions.
+    GATEWAY_JVM_HEAP_MB: Final      = int(os.getenv("ISABELLE_GATEWAY_JVM_HEAP_MB", "32768"))
+    GATEWAY_JVM_MIN_HEAP_MB: Final  = int(os.getenv("ISABELLE_GATEWAY_JVM_MIN_HEAP_MB", "2048"))
 
     BACKEND_EXIT_TIMEOUT: Final     = float(os.getenv("ISABELLE_BACKEND_EXIT_TIMEOUT", "60.0"))
     BACKEND_JOIN_TIMEOUT: Final     = float(os.getenv("ISABELLE_BACKEND_JOIN_TIMEOUT", "5.0"))
@@ -207,12 +214,12 @@ class Memory:
     # expected resident size of one session, the hard per-process ML heap cap
     # (the same ISABELLE_ML_MAXHEAP_MB the entrypoint writes into the Isabelle
     # user settings — read here for the check only; Python never enforces it)
-    # and the gateway JVM's launcher-default heap (-Xmx4g, docs/ISSUES.md Bug 11).
+    # and the gateway JVM's heap (Repl.GATEWAY_JVM_HEAP_MB, passed at gateway start).
     SESSION_ESTIMATE_MB: Final = int(
         os.getenv("ISABELLE_MEMORY_SESSION_ESTIMATE_MB", "2048")
     )
     ML_MAXHEAP_MB: Final = int(os.getenv("ISABELLE_ML_MAXHEAP_MB", "9216"))
-    JVM_HEAP_MB: Final = 4096
+    JVM_HEAP_MB: Final = Repl.GATEWAY_JVM_HEAP_MB
     SERVER_START_RETRIES: Final = int(os.getenv("ISABELLE_SERVER_START_RETRIES", "5"))
     # Session teardown -> cgroup accounting is not instantaneous (poly exit +
     # kernel reclaim lag). Pause after an eviction before re-reading the
