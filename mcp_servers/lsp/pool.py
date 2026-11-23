@@ -40,11 +40,12 @@ from ..common import (  # noqa: F401  (is_not_found re-exported)
 )
 from . import lease_renewal
 from .config import Config
+from .heap_notes import join_notes, sibling_note
 from .sibling_imports import (  # noqa: F401  (re-exported)
     master_dir_of, resolve_sibling_imports, sibling_imports as _sibling_imports,
 )
 from .header_context import (  # noqa: F401  (re-exported)
-    field_for, file_context, header_fields, header_imports, header_text,
+    field_for, file_context, file_context_note, header_fields, header_imports, header_text,
 )
 
 
@@ -73,7 +74,20 @@ class FileBinding:
     # across incremental syncs).
     running_since: Dict[Tuple[Any, Any], float] = field(default_factory=dict)
     spare_scheduled: bool = False  # scratch_spare.schedule_for_binding ran for this binding
+    # heap_notes.py: why this file's imports load from source and what to build; shown once
+    heap_note: Optional[str] = None
+    heap_note_shown: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+
+def _image_not_current(e: BaseException) -> bool:
+    """The server refused the session start: its image is out of date (409 image_not_current)."""
+    if not isinstance(e, httpx.HTTPStatusError) or e.response.status_code != 409:
+        return False
+    try:
+        return e.response.json().get("error") == "image_not_current"
+    except ValueError:
+        return False
 
 
 class LspPool(GymClientMixin):
@@ -124,8 +138,10 @@ class LspPool(GymClientMixin):
                 text = f.read()
         except OSError:
             text = None
+        note: Optional[str] = None
         if text is not None:
-            imports, field, session_dirs = await file_context(c, text, canon, heap_session)
+            imports, field, session_dirs, note = await file_context_note(
+                c, text, canon, heap_session, group)
             imports = imports or None
         # Acquire (not create): sessions released by other bindings with the
         # same dependency key (task_group + heap / imports, default field)
@@ -144,16 +160,39 @@ class LspPool(GymClientMixin):
         # session_dirs only when the file imports its project's sessions: every other
         # acquire is exactly what it was before (and works with clients without the key).
         extra = {"session_dirs": list(session_dirs)} if session_dirs else {}
-        resp = await c.acquire_session(
-            theories=imports, field=field, reuse_dirty=False,
-            task_group=group, heap_session=heap_session, label=label or canon, **extra,
-        )
+        # Theories of the file's own directory imported by bare name (absolute paths here) are
+        # checked from source by every acquire; heap_notes.sibling_note when that was slow.
+        siblings = [i for i in imports or () if i.startswith("/")]
+        parent = heap_session or field  # what a session holding the siblings has to build on
+        started = time.monotonic()
+        try:
+            resp = await c.acquire_session(
+                theories=imports, field=field, reuse_dirty=False,
+                task_group=group, heap_session=heap_session, label=label or canon, **extra,
+            )
+        except Exception as e:
+            # Only failures the notes explain carry them (the guard puts them before the bare
+            # "retry", common/guard.py): a load that ran into a timeout or ran long, and, for the
+            # heap note, a start refused because the image is out of date. A quick refusal for
+            # another reason (pool full, memory) keeps its own advice alone.
+            elapsed = time.monotonic() - started
+            slow = isinstance(e, httpx.TimeoutException) or elapsed >= Config.SIBLING_NOTE_S
+            failed_note = join_notes(
+                note if slow or _image_not_current(e) else None,
+                sibling_note(siblings, parent, group, elapsed, failed=True) if slow else None)
+            if failed_note:
+                setattr(e, "agent_note", failed_note)
+            raise
+        elapsed = time.monotonic() - started
+        if elapsed >= Config.SIBLING_NOTE_S:
+            note = join_notes(note, sibling_note(siblings, parent, group, elapsed, failed=False))
         binding = FileBinding(
             file_path=canon,
             session_id=resp["session_id"],
             lease_id=resp["lease_id"],
             task_group=group,
             heap_session=heap_session,
+            heap_note=note,
         )
         lease_renewal.ensure(self)
         self.registry.register(

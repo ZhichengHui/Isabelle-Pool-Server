@@ -28,6 +28,18 @@ from .registry import SessionRegistry
 OwnerOf = Callable[[Tuple[Any, ...], Dict[str, Any]], Any]
 
 
+def _with_agent_note(result: Any, exc: BaseException) -> Any:
+    """Put the note a tool attached to the failure (`agent_note`, e.g. lsp/heap_notes.py: the open
+    loaded theories from source because no usable heap holds them) first in the advice: a bare
+    "retry" would repeat the same failing load."""
+    note = getattr(exc, "agent_note", None)
+    if not note or not isinstance(result, dict):
+        return result
+    result["heap_note"] = note
+    result["advice"] = [note] + list(result.get("advice") or [])
+    return result
+
+
 def make_guard(  # pylint: disable=too-many-arguments
     *,
     registry: SessionRegistry,
@@ -46,12 +58,16 @@ def make_guard(  # pylint: disable=too-many-arguments
             try:
                 out = await fn(*args, **kwargs)
             except httpx.HTTPStatusError as exc:
-                return json.dumps(
-                    translate_http_error(
-                        exc, registry, owner, tools=tools, idle_s=idle_s
-                    ),
-                    default=str,
+                result = translate_http_error(
+                    exc, registry, owner, tools=tools, idle_s=idle_s
                 )
+                return json.dumps(_with_agent_note(result, exc), default=str)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                note = getattr(exc, "agent_note", None)
+                if not note:
+                    raise
+                # still a tool error (isError) for the client, now with the note in its text
+                raise RuntimeError(f"{type(exc).__name__}: {exc}. {note}") from exc
             registry.clear_memory_failures(owner)
             try:
                 client = await get_client()
