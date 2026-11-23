@@ -93,12 +93,16 @@ def _sessions_of(dirs: List[str]) -> Dict[str, str]:
 
 def plan(theories: Optional[List[str]], field: str, session_dirs: Optional[List[str]]) -> Optional[Plan]:
     """The image a session with these inputs needs built first, or None (see the module doc)."""
-    theories = list(theories or [])
-    dirs = list(session_dirs or [])
-    siblings = [t for t in theories if t.startswith("/")]
+    # One name must always come with one ROOT text: the same theories arrive in different orders
+    # (opening a file, starting a scratch session), and a ROOT rewritten under the same name makes
+    # `isabelle build` judge the heap out of date and rebuild it. So everything the name and the
+    # ROOT are made of is taken in sorted order, without duplicates.
+    theories = list(dict.fromkeys(theories or []))
+    dirs = sorted(set(session_dirs or []))
+    siblings = sorted(t for t in theories if t.startswith("/"))
     own = _sessions_of(dirs)
-    own_used = list(dict.fromkeys(
-        t.split(".", 1)[0] for t in theories if not t.startswith("/") and t.split(".", 1)[0] in own))
+    own_used = sorted({
+        t.split(".", 1)[0] for t in theories if not t.startswith("/") and t.split(".", 1)[0] in own})
     if siblings:
         masters = {os.path.dirname(s) for s in siblings}
         if len(masters) != 1:

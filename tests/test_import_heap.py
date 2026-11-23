@@ -39,6 +39,24 @@ def test_siblings_get_a_generated_session_on_the_field(state, monkeypatch):
     assert ih.plan([str(proj / "C"), str(proj / "B"), "HOL-Library.Multiset"], "HOL", []).name == p.name
 
 
+def test_any_order_of_the_same_theories_gives_one_name_and_one_root(state):
+    """Opening a file and starting a scratch session pass the same theories in different orders;
+    a different ROOT text under the same name made `isabelle build` rebuild the heap each time."""
+    import itertools
+    proj = _project(state)
+    (proj / "lib2").mkdir()
+    (proj / "lib2" / "ROOT").write_text("session S_ih2 = HOL +\n  theories U\n")
+    dirs = [str(proj / "lib"), str(proj / "lib2")]
+    theories = [str(proj / "B"), str(proj / "C"), "S_ih.T", "S_ih2.U", "HOL-Library.Multiset"]
+    plans = [ih.plan(list(order), "HOL", d)
+             for order in itertools.permutations(theories)
+             for d in (dirs, dirs[::-1])]
+    assert len({(p.name, p.root_text, p.root_dir) for p in plans}) == 1
+    # a theory named twice is one theory
+    twice = ih.plan(theories + [str(proj / "B")], "HOL", dirs)
+    assert (twice.name, twice.root_text) == (plans[0].name, plans[0].root_text)
+
+
 def test_siblings_and_a_project_session_build_on_that_session(state):
     proj = _project(state)
     lib = str(proj / "lib")
