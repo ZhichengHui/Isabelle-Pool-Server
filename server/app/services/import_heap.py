@@ -27,7 +27,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import logging
+
 import os
 import re
 import time
@@ -35,10 +35,12 @@ from dataclasses import dataclass, field as dc_field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from server.app.core.config import Heap
+from server.app.core.config import Heap, Server
+from server.app.core.input_guards import find_code_execution
+from server.app.core.logging import get_logger
 from server.app.services import build_process, image_select
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 PREFIX = "IPS_"  # = Edit_Utils.GENERATED_SESSION_PREFIX (Scala)
 FAILED_RETRY_S = 60.0  # a failed build is tried again after this (or at once for a changed source)
@@ -55,6 +57,9 @@ class Plan:
     root_dir: Optional[str] = None  # a generated session's ROOT directory
     root_text: Optional[str] = None
     watch: List[str] = dc_field(default_factory=list)  # sources whose change retries a failure
+    # (directory, recursive) whose theories the build runs: scanned for code-executing commands
+    # like heap_pool does (Server.ALLOW_ML_COMMANDS); empty for registered/distribution sessions
+    scan: List[Tuple[str, bool]] = dc_field(default_factory=list)
 
 
 class ImportHeapBuilding(Exception):
@@ -109,9 +114,10 @@ def plan(theories: Optional[List[str]], field: str, session_dirs: Optional[List[
                 + "  theories\n" + "".join(f"    {n}\n" for n in names))
         wrapper = [f"{name}.{n}" for n in names] + [t for t in theories if not t.startswith("/")]
         watch = sorted(str(p) for p in Path(master).glob("*.thy"))
-        return Plan(name, [root_dir] + dirs, wrapper, root_dir, text, watch)
+        scan = [(master, False)] + [(own[s], True) for s in own_used]
+        return Plan(name, [root_dir] + dirs, wrapper, root_dir, text, watch, scan)
     if len(own_used) == 1:
-        return Plan(own_used[0], dirs, theories)
+        return Plan(own_used[0], dirs, theories, scan=[(own[own_used[0]], True)])
     if theories and not image_select.current(field, image_select.images(), tuple(dirs)):
         return Plan(field, dirs, theories)
     return None
@@ -133,6 +139,24 @@ def _progress(log_path: Path) -> Tuple[List[str], List[str]]:
         if m and m.group(1) not in finished:
             finished.append(m.group(1))
     return started, finished
+
+
+def code_execution(p: Plan) -> Optional[str]:
+    """The first theory of the build that contains a code-executing command (ML, setup, file IO),
+    as a message, unless the server allows them: `isabelle build` would run it, so such a build is
+    refused, as heap_pool refuses one (documents are checked the same way, input_guards)."""
+    if Server.ALLOW_ML_COMMANDS:
+        return None
+    for d, recursive in p.scan:
+        for thy in sorted(Path(d).rglob("*.thy") if recursive else Path(d).glob("*.thy")):
+            try:
+                kw = find_code_execution(thy.read_text(encoding="utf-8", errors="replace"))
+            except OSError:
+                continue
+            if kw is not None:
+                return (f"{thy}: contains the code-executing command '{kw}'; the server does not "
+                        "build heaps of such theories (ISABELLE_ALLOW_ML_COMMANDS=false)")
+    return None
 
 
 def _watch_state(paths: List[str]) -> Tuple:
@@ -190,8 +214,15 @@ class Builder:
             if not root.is_file() or root.read_text() != p.root_text:
                 root.write_text(p.root_text or "")
             (Path(p.root_dir) / "last_used").touch()
+        refused = await asyncio.to_thread(code_execution, p)
+        if refused:
+            return {"status": "failed", "session": p.name, "log_tail": refused}
         if await asyncio.to_thread(self._current, p):
             return {"status": "ready", "session": p.name}
+        # another request may have started the build while this one checked (the await above)
+        job = self._jobs.get(p.name)
+        if job is not None and job.finished_at is None:
+            return self._status(job, "building")
         self._start(p)
         return self._status(self._jobs[p.name], "building")
 

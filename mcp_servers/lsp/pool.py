@@ -244,6 +244,7 @@ class LspPool(GymClientMixin):
         except BaseException as e:
             if isinstance(e, Exception):
                 fut.set_exception(e)
+                fut.exception()  # retrieved: no "never retrieved" warning when nobody else waited
             else:
                 fut.cancel()  # cancellation: waiters see CancelledError and may retry
             raise

@@ -108,6 +108,33 @@ def test_build_then_ready(state, monkeypatch):
     asyncio.run(run())
 
 
+def test_requests_at_the_same_moment_start_one_build(state, monkeypatch):
+    proj = _project(state)
+    p = ih.plan([str(proj / "B")], "HOL", [])
+    runs = state / "runs"
+    script = _fake_isabelle(state, state / "nofail")
+    wrapper = state / "counting-isabelle"
+    wrapper.write_text(f'#!/bin/bash\necho x >> "{runs}"\nexec "{script}" "$@"\n')
+    wrapper.chmod(0o755)
+    ih.BUILDER.isabelle = str(wrapper)
+
+    def slow_images():  # both requests are inside the up-to-date check at once
+        import time as _t
+        _t.sleep(0.2)
+        return {}
+
+    monkeypatch.setattr(image_select, "images", slow_images)
+
+    async def run():
+        a, b = await asyncio.gather(ih.BUILDER.ensure(p), ih.BUILDER.ensure(p))
+        assert a["status"] == b["status"] == "building"
+        await ih.BUILDER._jobs[p.name].task
+        await asyncio.sleep(1.5)  # a second, queued build (the bug) would have run by now
+
+    asyncio.run(run())
+    assert runs.read_text().count("x") == 1
+
+
 def test_a_failure_is_reported_until_a_source_changes(state, monkeypatch):
     proj = _project(state)
     p = ih.plan([str(proj / "B")], "HOL", [])
@@ -128,6 +155,23 @@ def test_a_failure_is_reported_until_a_source_changes(state, monkeypatch):
         assert (await ih.BUILDER.ensure(p))["status"] == "building"
 
     asyncio.run(run())
+
+
+def test_theories_that_run_code_are_not_built(state, monkeypatch):
+    from server.app.core.config import Server
+
+    proj = _project(state)
+    (proj / "B.thy").write_text("theory B imports Main begin\nML \\<open>1\\<close>\nend")
+    p = ih.plan([str(proj / "B")], "HOL", [])
+    ih.BUILDER.isabelle = _fake_isabelle(state, state / "nofail")
+    monkeypatch.setattr(image_select, "images", lambda: {})
+    monkeypatch.setattr(image_select, "current", lambda name, imgs, dirs: False)
+    monkeypatch.setattr(Server, "ALLOW_ML_COMMANDS", False)
+    out = asyncio.run(ih.BUILDER.ensure(p))
+    assert out["status"] == "failed" and "B.thy" in out["log_tail"] and "'ML'" in out["log_tail"]
+    assert p.name not in ih.BUILDER._jobs  # nothing was run
+    monkeypatch.setattr(Server, "ALLOW_ML_COMMANDS", True)
+    assert asyncio.run(ih.BUILDER.ensure(p))["status"] == "building"
 
 
 def test_prepare_answers_building_then_the_built_inputs(state, monkeypatch):
