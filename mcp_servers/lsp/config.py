@@ -32,30 +32,29 @@ class Config:
     # server's own answer (e.g. session_start_timeout) arrives instead of a client timeout; heap
     # builds do not count: the server answers 202 at once and builds in the background.
     HTTP_TIMEOUT: float = env_float(_P, "HTTP_TIMEOUT", 720.0)
-    # Wall budget (s) for load_document syncs and per-candidate attempt verification.
+    # Wall budget (s) for load_document syncs.
     LOAD_TIMEOUT: float = env_float(_P, "LOAD_TIMEOUT", 30.0)
     # Elapsed seconds at which a long-running command or a timed-out attempt is reminded in the
     # tool result (reminders.py): comma-separated, ascending; empty turns the reminders off.
     REMINDER_S: str = env_str(_P, "REMINDER_S", "30,120,300,600")
-    ATTEMPT_TIMEOUT: float = env_float(_P, "ATTEMPT_TIMEOUT", 180.0)
+    # Default time limit (s) of each isabelle_multi_attempt candidate (the server caps it at 300)
+    # and of isabelle_run_code. On the scratch-session fallback of multi_attempt it bounds the
+    # whole text (the file before `line` is checked there again).
+    ATTEMPT_TIMEOUT: float = env_float(_P, "ATTEMPT_TIMEOUT", 30.0)
 
-    # Concurrency cap for multi_attempt fan-out (bounded by the server pool).
+    # Concurrency cap for the scratch-session fallback of multi_attempt (in the file session
+    # the server decides: as many candidates at once as the session has worker threads).
     MAX_PARALLEL: int = env_int(_P, "MAX_PARALLEL", 4)
-    # Warm scratch sessions kept per context (task_group, heap, imports, field);
-    # reused across calls — each use is a load_document reset.
+    # Scratch sessions (isabelle_run_code and the multi_attempt fallback) kept per context
+    # (task_group, heap, imports, field); started on first use, reused across calls — each
+    # use is a load_document reset. None are prepared in advance.
     SCRATCH_POOL_SIZE: int = env_int(_P, "SCRATCH_POOL_SIZE", 4)
     # Max seconds a caller waits for a scratch slot once the pool is at its cap
     # (a legitimate wait is one other candidate's verification); expiry raises a
     # clear error instead of hanging forever (Bug 17 / audit MCP-1).
     SCRATCH_WAIT_TIMEOUT: float = env_float(_P, "SCRATCH_WAIT_TIMEOUT", ATTEMPT_TIMEOUT + 60.0)
-    # Idle scratch sessions kept ready per context, already loaded with the file's text
-    # (scratch_spare.py): min(SCRATCH_SPARE, MAX_PARALLEL), within SCRATCH_POOL_SIZE, prepared
-    # in the background after a file is bound and topped up after each multi_attempt, so each
-    # candidate of the next multi_attempt (also the first) finds a warm, checked session. Each
-    # spare is a held Isabelle session (memory). 0 disables.
-    SCRATCH_SPARE: int = env_int(_P, "SCRATCH_SPARE", 4)
 
-    # Every session this MCP holds (open files and warm scratch sessions) has its
+    # Every session this MCP holds (open files and scratch sessions) has its
     # lease renewed this often while the MCP runs (lease_renewal.py), so the
     # server's abandoned-lease rule (ISABELLE_MAX_LEASE_AGE) closes only sessions
     # of a client that died. Keep it well below that age. 0 disables. Warm

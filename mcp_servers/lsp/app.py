@@ -6,16 +6,15 @@ State is keyed by canonical FILE PATH (the agent never sees session ids).
 SYNC MODEL (copied buffer): the MCP never writes files. Every file-scoped tool
 re-reads the file from disk first; if it changed on disk since the last sync,
 the new text is pushed to the file's session via load_document(report=true)
-before answering. Execution tools (multi_attempt/run_code) run on WARM SCRATCH
-sessions and never touch the file session.
+before answering. isabelle_multi_attempt runs its candidates as overlay queries in
+the file's own session (attempt_tools.py; no text edits); isabelle_run_code runs on a
+scratch session and never touches the file session.
 
 POSITIONS: all lines/columns are 1-based; columns are UTF-16 units (LSP
 convention, same as editors and the server's report ranges).
 """
 from __future__ import annotations
 
-import asyncio
-import json
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -24,13 +23,16 @@ from ..common import dump_json as _j
 from ..common import translate_http_error
 from .config import Config
 from .reminders import add_reminder
-from .pool import attempt_prefix, field_for, file_context, header_fields, header_text, master_dir_of
-from .verdict import candidate_verdict
+from .pool import field_for, header_fields, header_text
 
-from . import scratch_spare
+from .attempt_tools import isabelle_multi_attempt  # noqa: F401  (registers it on `mcp`)
 from . import fill_tools  # noqa: F401  (registers the fill_sorries tools on `mcp`)
 from . import memory_tools  # noqa: F401  (registers the memory tools on `mcp`)
 from .server import ALWAYS_LOAD, TOOLS, _attach_still_running, _bound_synced, mcp, pool, synced_tool, tool  # noqa: F401
+
+
+# isabelle_sledgehammer: the provers' time limit is capped here (plan C2).
+SLEDGEHAMMER_MAX_S = 120
 
 
 # ------------------------------------------------------------------ lifecycle
@@ -51,7 +53,6 @@ async def isabelle_open(
     """
     binding = await pool.get_binding(file_path, task_group, heap_session, label)
     reloaded = await pool.sync(binding)
-    scratch_spare.schedule_for_binding(pool, binding)
     rep = binding.last_report or {}
     return _attach_still_running(_j({
         "opened": binding.file_path,
@@ -275,8 +276,11 @@ async def isabelle_sledgehammer(
     1-based `line` (positioned; optional 1-based `subgoal`). Returns proof-method
     suggestions; paste a suggestion verbatim into the file (or test it first
     with isabelle_multi_attempt). {found, results} or {found:false, error:'no
-    open goal at line N'}. The server bounds concurrent sledgehammers globally.
+    open goal at line N'}. Runs in the file's own session. `timeout_s` is the
+    provers' time limit: default 30, at most 120 (a larger value runs at 120).
+    The server bounds concurrent sledgehammers globally.
     """
+    timeout_s = max(1, min(int(timeout_s), SLEDGEHAMMER_MAX_S))
     binding, _ = await _bound_synced(file_path)
     if line is None:
         return _j(await pool.call(
@@ -339,148 +343,7 @@ async def isabelle_last_report(file_path: str) -> str:
 
 
 # ------------------------------------------------------------ scratch execution
-
-@synced_tool()
-async def isabelle_multi_attempt(
-    file_path: str, line: int, candidates: List[str], timeout: Optional[float] = None,
-) -> str:
-    """Try several proof-step candidates at a position, each on an ISOLATED warm
-    scratch session — the file and its session are never modified.
-
-    `line` (1-based) is the first line of the file text that the candidate REPLACES: the
-    candidate takes the place of line `line` and of every line after it, and the rest of the
-    file is not part of the check, so the candidate must hold all the text from `line` on
-    that the check needs. To test a step in place of a `sorry`, give the `sorry`'s line and
-    the step; to test the next step of an open proof, give the line after its last command.
-    The tool verifies the file's text BEFORE `line` with the candidate appended (per-command
-    report): a `qed` that follows `line` in the file is not there, so a candidate that closes
-    the goals leaves the proof open (`pending_qed`). `line` is 1 to the number of lines of
-    the file plus 1; the number of lines plus 1 appends the candidate after the end of the
-    file (after a final `end` a candidate has no theory to run in), any other value is an
-    error. Candidates run concurrently (bounded by ISABELLE_MCP_LSP_MAX_PARALLEL and the
-    scratch pool size). The result is indented JSON, one entry per candidate. Per candidate:
-    - verdict: the field that says whether the candidate can be used. `ok`: it ran without
-      error or timeout and without a `sorry` of its own (goals may remain, see
-      proof_open/subgoals); `failed`: an error in the candidate, or the check did not
-      succeed; `timed_out`; `used_sorry`; `prefix_failed`: a command before `line` failed,
-      so the candidate's result is not reliable: fix the prefix first; `error`: the
-      candidate could not be run (see error);
-    - success / proof_open / pending_qed / timed_out for the whole text (file part
-      before `line` plus candidate); proof_open: goals remain after the candidate;
-      pending_qed: its goals are closed and only the closing `qed`/`done` is missing;
-    - used_sorry: a `sorry` (or `oops`) of the CANDIDATE was executed;
-      prefix_used_sorry: one of the file text before `line` was (the key is there
-      only when it is true);
-    - failed: the failed or still-running commands of the candidate with their
-      complete error messages (warnings are not included); `candidate_line` 1 is
-      file line `line`. A failed or running command before `line` is listed in
-      prefix_failed with its file `line`;
-    - subgoals (only when proof_open or pending_qed): the goals the candidate
-      leaves, so the next step can be chosen without writing the candidate into the
-      file: the goals as Isabelle prints them, one array element per line (`1. …`,
-      `2. …`; continuation lines are indented). MEMORY: a
-    candidate result with error memory_pressure, or a memory_reminder on the
-    answer, means the prover server is short of memory — call
-    isabelle_release_idle(), then retry; if the advice says the memory is
-    held by others, stop and tell the user.
-    """
-    binding, _ = await _bound_synced(file_path)
-    text = binding.cached_text or ""
-    n_lines = len(text.splitlines())
-    if not isinstance(line, int) or isinstance(line, bool) or not 1 <= line <= n_lines + 1:
-        return _j({
-            "error": "line_out_of_range",
-            "detail": f"line must be between 1 and {n_lines + 1}: the file has {n_lines} lines "
-                      f"and line {n_lines + 1} appends the candidate at its end (got {line!r})",
-        })
-    prefix = attempt_prefix(text, line)
-    c = await pool.client()
-    master_dir = master_dir_of(binding.file_path)
-    imports, field, session_dirs = await file_context(
-        c, text, binding.file_path, binding.heap_session)
-    key = pool.scratch_key(
-        binding.task_group, binding.heap_session, imports, field, session_dirs,
-        binding.import_digest)
-    budget = timeout or Config.ATTEMPT_TIMEOUT
-    cap = max(1, min(Config.MAX_PARALLEL, len(candidates)))
-    sem = asyncio.Semaphore(cap)
-
-    async def try_one(candidate: str) -> Dict[str, Any]:
-        async with sem:
-            try:
-                # The bracket ALWAYS returns the scratch slot (also on cancellation)
-                # — see LspPool.scratch_session (Bug 17 / audit MCP-1).
-                async with pool.scratch_session(key) as (sid, lease):
-                    rep_result = await c.load_document(
-                        sid, prefix + candidate, report=True,
-                        timeout=budget, lease_id=lease, master_dir=master_dir)
-                    rep = rep_result.get("report") or {}
-                    subgoals = None
-                    if rep.get("proof_open") or rep.get("pending_qed"):
-                        try:
-                            state = await c.get_proof_state(sid, lease_id=lease)
-                            subgoals = [ln for g in state.get("subgoals") or [] for ln in str(g).splitlines()]
-                        except Exception:  # noqa: BLE001  (the goals are an extra, not the verdict)
-                            subgoals = None
-                bad, prefix_bad = [], []
-                for cmd in rep.get("commands", []) or []:
-                    if cmd.get("status") in ("failed", "running"):
-                        msgs = cmd.get("messages") or []
-                        errors = [m for m in msgs if m.get("sev") == "error"] or msgs
-                        entry = {
-                            "kind": cmd.get("kind"),
-                            "status": cmd.get("status"),
-                            "messages": "\n".join(m.get("text", "") or "" for m in errors),
-                        }
-                        file_line = cmd.get("node_line") or cmd.get("line") or 0
-                        if file_line >= line:
-                            bad.append({"candidate_line": file_line - (line - 1), **entry})
-                        else:
-                            prefix_bad.append({"line": file_line, **entry})
-                sorry_lines = rep.get("sorry_lines")
-                if sorry_lines is None:  # a backend without the whole-text list
-                    used_sorry, prefix_used_sorry = rep.get("used_sorry"), False
-                else:
-                    used_sorry = any(n >= line for n in sorry_lines)
-                    prefix_used_sorry = any(n < line for n in sorry_lines)
-                result = {
-                    "candidate": candidate,
-                    "verdict": candidate_verdict(rep, bad, prefix_bad, used_sorry),
-                    "success": rep.get("success"),
-                    "proof_open": rep.get("proof_open"),
-                    "pending_qed": rep.get("pending_qed"),
-                    "used_sorry": used_sorry,
-                    "timed_out": rep.get("timed_out"),
-                    "failed": bad,
-                }
-                add_reminder(result, rep.get("timed_out"), budget, "this candidate")
-                if prefix_used_sorry:
-                    result["prefix_used_sorry"] = True
-                if prefix_bad:
-                    result["prefix_failed"] = prefix_bad
-                if subgoals is not None:
-                    result["subgoals"] = subgoals
-                return result
-            except httpx.HTTPStatusError as e:
-                # A memory 503 (the scratch create is the gated call) becomes the
-                # structured candidate: error=memory_pressure + advice (review d2bc679 B1).
-                # owner=None: this server is single-agent, so "owned" means every entry;
-                # revisit here if per-connection ownership (the stepwise model) arrives.
-                return {
-                    "candidate": candidate,
-                    "verdict": "error",
-                    **translate_http_error(
-                        e, pool.registry, None, tools=TOOLS, idle_s=Config.ADVICE_IDLE_S
-                    ),
-                }
-            except Exception as e:  # noqa: BLE001
-                return {"candidate": candidate, "verdict": "error",
-                        "error": f"{type(e).__name__}: {e}"}
-
-    results = await asyncio.gather(*(try_one(cand) for cand in candidates))
-    scratch_spare.ensure(pool, key, text, master_dir)  # top the warm, loaded spares up again
-    return json.dumps(list(results), indent=1, ensure_ascii=False, default=str)
-
+# (isabelle_multi_attempt runs in the file's own session: attempt_tools.py)
 
 @tool()
 async def isabelle_run_code(

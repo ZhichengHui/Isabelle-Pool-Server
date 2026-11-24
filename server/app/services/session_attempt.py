@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from typing import Any, Dict, List, Optional
 
 from server.app.core.logging import get_logger
@@ -26,8 +27,16 @@ logger = get_logger(__name__)
 # at the cap and its result says so.
 ATTEMPT_TIMEOUT_DEFAULT_S = 30
 ATTEMPT_TIMEOUT_MAX_S = 300
-# Candidates running at once (plan C3); more are queued.
-ATTEMPT_MAX_PARALLEL = 8
+# Candidates running at once; more are queued. 0: as many as the session has worker threads
+# (Isabelle option `threads`, ISABELLE_SESSION_THREADS, default 4), decided by the backend.
+# Deviation from plan C3 (8): a candidate runs as a print function, which needs a worker of the
+# session's farm, so with 4 workers 8 overlays run in two waves (prototype: 8 x 5 s took 10.2 s
+# with threads=4, 7.2 s with threads=10). The thread count is a setting of the whole prover and
+# raising it lets ordinary file checks use more threads too (peak memory, Bug 6); 4 covers the
+# observed calls (334 multi_attempt calls: candidates p50 2, p99 5, max 10).
+ATTEMPT_MAX_PARALLEL = int(os.getenv("ISABELLE_ATTEMPT_MAX_PARALLEL", "0"))
+# What the waves are computed with when ATTEMPT_MAX_PARALLEL is 0 (the backend's default).
+_SESSION_THREADS = int(os.getenv("ISABELLE_SESSION_THREADS", "4")) or 8
 # Scala removes an overlay this long after the candidate's time limit (Backend_Attempts.GRACE_MS).
 ATTEMPT_GRACE_S = 15
 
@@ -41,10 +50,11 @@ def effective_timeout(requested: Optional[float]) -> tuple[int, bool]:
 
 
 def backend_wait_s(n_candidates: int, timeout_s: int) -> float:
-    """Upper bound of the backend call: the candidates run in waves of
-    ATTEMPT_MAX_PARALLEL, each bounded by timeout + grace, plus the prefix wait and
+    """Upper bound of the backend call: the candidates run in waves (as many at once
+    as run in parallel), each bounded by timeout + grace, plus the prefix wait and
     slack for the polling."""
-    waves = max(1, math.ceil(n_candidates / ATTEMPT_MAX_PARALLEL))
+    parallel = ATTEMPT_MAX_PARALLEL if ATTEMPT_MAX_PARALLEL > 0 else _SESSION_THREADS
+    waves = max(1, math.ceil(n_candidates / parallel))
     return (waves + 1) * (timeout_s + ATTEMPT_GRACE_S) + 30.0
 
 

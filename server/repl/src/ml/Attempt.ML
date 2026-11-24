@@ -12,7 +12,10 @@
    the host theory's outer syntax and run command by command as PIDE runs a document
    (Command.eval_state): Toplevel.reset_state, then Toplevel.command_errors; a failed
    command leaves the state as it was, and the next command runs on that state. The
-   whole run is bounded by Timeout.apply (timeout_s < 1: no bound).
+   whole run is bounded by Timeout.apply_physical (timeout_s < 1: no bound): wall time,
+   since Timeout.apply does not count GC time (Event_Timer moves a non-physical request
+   by the GC time since it was made) and an allocation-heavy candidate overran its limit
+   several times over in the prototype.
 
    Proofs are NOT forked here (parallel_proofs = 0 for the run): a forked `by` would
    report its error to the future, outside the candidate's result, possibly after the
@@ -99,15 +102,10 @@ fun run timeout_s text state0 out =
         val _ = current := NONE;
       in () end;
 
-    (*PROTOTYPE HOOKS (removed after the prototype)*)
-    val proto_fork = String.isPrefix "(*PROTO_FORK*)" text;
-    val proto_notimeout = String.isPrefix "(*PROTO_NOTIMEOUT*)" text;
-    fun run_all () =
-      if proto_fork then List.app step trs
-      else Interactive.setmp_parallel_proofs 0 (List.app step) trs;
+    fun run_all () = Interactive.setmp_parallel_proofs 0 (List.app step) trs;
 
     val timed_out =
-      (if timeout_s < 1 orelse proto_notimeout then run_all () else Timeout.apply_physical (Time.fromSeconds timeout_s) run_all ();
+      (if timeout_s < 1 then run_all () else Timeout.apply_physical (Time.fromSeconds timeout_s) run_all ();
        false)
       handle Timeout.TIMEOUT _ =>
         ((case ! current of SOME tr => report tr "running" false "" | NONE => ()); true);

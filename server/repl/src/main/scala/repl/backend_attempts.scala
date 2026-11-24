@@ -10,8 +10,9 @@ import isabelle._
  *  result state is the state the candidate continues from, so neither a new session nor
  *  a re-check of the file before `line` is needed.
  *
- *  - at most `max_parallel` overlays at once, the others queued (print functions of
- *    pri 0 run in parallel: Command.parallel_print);
+ *  - at most `max_parallel` overlays at once (default: the session's worker threads),
+ *    the others queued (print functions of pri 0 run in parallel on the worker farm:
+ *    Command.parallel_print);
  *  - the ML side bounds each candidate by `timeout_s` (Timeout.apply); an overlay still
  *    unfinished `timeout_s` + GRACE_MS after it was attached is removed, which cancels it;
  *  - `cancel_attempts(reason)` removes every overlay of the running attempt at once; it
@@ -77,7 +78,10 @@ trait Backend_Attempts { this: ReplBackend =>
   @volatile private var current_run: Option[Attempt_Run] = None
 
   /** Try the candidates (`candidates_json`: a JSON array of strings; Py4J passes no
-   *  Python lists) at 1-based `line` of the current document; JSON (see Attempt_Run.run). */
+   *  Python lists) at 1-based `line` of the current document; JSON (see Attempt_Run.run).
+   *  `max_parallel` <= 0: as many as the session has worker threads (system option
+   *  `threads`, ISABELLE_SESSION_THREADS, default 4; 0 = automatic counts as 8): a print
+   *  function needs a worker, so more overlays than workers would only wait. */
   def attempt(line: Int, candidates_json: String, timeout_s: Int, max_parallel: Int): String = {
     Repl_Output.reset()
     val candidates = JSON.parse(candidates_json) match {
@@ -85,8 +89,11 @@ trait Backend_Attempts { this: ReplBackend =>
       case _ => error("attempt: candidates must be a JSON array of strings")
     }
     repl_session.with_current_node { (session, node) =>
+      val parallel =
+        if (max_parallel > 0) max_parallel
+        else session.session_options.int("threads") match { case t if t > 0 => t case _ => 8 }
       val run = new Attempt_Run(session, repl_session.overlays, node, line,
-        candidates, timeout_s, max_parallel max 1)
+        candidates, timeout_s, parallel)
       current_run = Some(run)
       try run.run() finally current_run = None
     }.getOrElse(JSON.Format(JSON.Object("fallback" -> "no_host", "candidates" -> Nil)))

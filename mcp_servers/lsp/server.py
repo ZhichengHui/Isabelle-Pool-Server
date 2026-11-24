@@ -17,7 +17,6 @@ from ..common import ToolNames, dump_json, make_guard
 from .config import Config
 from .reminders import reminder
 from .pool import LspPool
-from . import scratch_spare
 
 _INSTRUCTIONS = f"""\
 Isabelle Pool Server: checks Isabelle/HOL theory (.thy) files on warm Isabelle sessions. Use these \
@@ -30,9 +29,10 @@ Key capabilities:
 isabelle_goal and isabelle_proof_state re-check only from the first changed command on, which is much \
 faster than a batch build of the whole theory.
 - Trying proofs without editing the file: isabelle_multi_attempt checks several candidate proofs at \
-one line in parallel, each on its own scratch session with its own time limit.
-- Finding proofs: isabelle_sledgehammer runs sledgehammer on one goal; isabelle_fill_sorries runs it \
-on every sorry of the file in the background.
+one line in parallel in the file's own session (from the proof state at that line, without \
+re-checking the file), each with its own time limit (default 30 s).
+- Finding proofs: isabelle_sledgehammer runs sledgehammer on one goal (default 30 s, at most 120 s); \
+isabelle_fill_sorries runs it on every sorry of the file in the background.
 - Blocked checks: a check waits at most {Config.LOAD_TIMEOUT:.0f} s; if commands are still running \
 then, the result carries still_running with their lines.
 - Inspection: isabelle_query (thm, term, find_theorems, ...), local and global facts, definitions, \
@@ -163,5 +163,4 @@ async def _bound_synced(file_path: str):
     """get_binding + sync — the preamble of every file-scoped tool."""
     binding = await pool.get_binding(file_path)
     reloaded = await pool.sync(binding)
-    scratch_spare.schedule_for_binding(pool, binding)
     return binding, reloaded
