@@ -223,6 +223,8 @@ class SessionMemoryMixin:  # pylint: disable=too-many-instance-attributes
             ),
             "sledgehammer_peak_mb": _mb(self.sledgehammer_peak_bytes) or 0.0,
             "sledgehammer_shared_with": self.sledgehammer_shared_with,
+            # the memory guard's last reading (memory_guard.py): heap in use, MB
+            "heap_in_use_mb": _guard_mb(getattr(self, "guard_heap", None)),
         }
 
 
@@ -318,6 +320,12 @@ class MemoryAwareSession(
                 )
 
 
+def _guard_mb(stats: Optional[Dict[str, int]]) -> Optional[float]:
+    if not stats or "size_heap" not in stats:
+        return None
+    return _mb(max(0, stats["size_heap"] - stats.get("size_heap_free_last_GC", 0)))
+
+
 def probe_memory(session: Any, now: Optional[float] = None) -> bool:
     """Request-path hook: probe if due. No-op for sessions without the mixin."""
     if isinstance(session, SessionMemoryMixin):
@@ -379,4 +387,5 @@ def memory_fields(session: Any) -> Dict[str, Any]:
         "sledgehammer_mb": None,
         "sledgehammer_peak_mb": None,
         "sledgehammer_shared_with": None,
+        "heap_in_use_mb": None,
     }

@@ -140,7 +140,6 @@ class HeapPool:
         self.allowed_roots: Optional[List[str]] = list(allowed_roots) if allowed_roots else None
         self._entries: Dict[Tuple[str, str], Dict[str, Any]] = {}
         self._locks: Dict[Tuple[str, str], asyncio.Lock] = {}
-        self._build_semaphore = asyncio.Semaphore(Heap.MAX_CONCURRENT_BUILDS)
         self._home_user: Optional[Any] = None  # None = unresolved; False = unavailable
         self._home: Optional[Any] = None  # same, for ISABELLE_HOME
         self._load_manifests()
@@ -326,7 +325,7 @@ class HeapPool:
                 f"build already in progress for {task_group}:{project}"
             )
         async with lock:
-            async with self._build_semaphore:
+            async with build_process.build_slots():
                 return await self._build_locked(task_group, project, session_name, built_by)
 
     async def _build_locked(

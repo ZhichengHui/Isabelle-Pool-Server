@@ -32,6 +32,7 @@ _SESSION_FIELDS = (
     "sledgehammer_mb",
     "sledgehammer_peak_mb",
     "sledgehammer_shared_with",
+    "heap_in_use_mb",
 )
 
 

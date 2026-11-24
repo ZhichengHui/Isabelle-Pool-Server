@@ -59,7 +59,7 @@ The ones to check first:
 ISABELLE_POOL_SIZE=3              # max concurrent Isabelle sessions (each ~1.5-4 GB)
 ISABELLE_INITIAL_SESSIONS=0       # sessions pre-warmed at startup (0 = fast startup)
 ISABELLE_MEMORY_PRESSURE_THRESHOLD=80.0   # refuse new sessions above this used-%
-ISABELLE_ML_MAXHEAP_MB=9216       # hard per-process ML heap cap (Poly/ML --maxheap)
+ISABELLE_ML_MAXHEAP_MB=16384      # hard per-process ML heap cap (Poly/ML --maxheap; x86_64_32 allows 32 GiB)
 ISABELLE_ADMIN_TOKEN=...          # admin console / admin endpoints credential
 ```
 
@@ -249,7 +249,7 @@ until the kernel OOM killer takes down the whole server. It **must** live in the
 user settings file (`$(isabelle getenv -b ISABELLE_HOME_USER)/etc/settings`), not in the
 environment — the polyml component's own `etc/settings` forces `ML_OPTIONS=""`. The script
 writes `ML_OPTIONS="--minheap 500 --enablegcsharing --maxheap $ISABELLE_ML_MAXHEAP_MB"`
-(default 9216) and leaves an existing `--maxheap` untouched, so hand-tuning wins.
+(default 16384) and leaves an existing `--maxheap` untouched, so hand-tuning wins.
 
 ### B4. `.env`
 

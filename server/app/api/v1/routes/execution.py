@@ -1,6 +1,7 @@
 """Execution: small-step commands, verify_chunk, whole-document load, theory
 entry, the lease-free big-step build, and the stateless header parser."""
 import asyncio
+import time
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -10,6 +11,7 @@ from server.app.errors import ImportsNotCovered, SessionError, SessionNotFound
 from server.app.core.input_guards import validate_import_name
 from server.app.core.logging import get_logger, logging_context
 from server.app.services.import_coverage import as_header_failed, uncovered_imports
+from server.app.services.memory_guard import annotate_report, memory_kind_since
 from server.app.services.theory_parsing import parse_theory_header, suggested_field
 
 from ..deps import LeasedSession, SessionManagerDep
@@ -51,6 +53,7 @@ async def execute_command(
     # Dead-prover check + memory probe in the same worker thread (plan §2.B):
     # a dead prover can answer a step with stale output, so its result is
     # overridden to a failure and the session discarded.
+    started = time.time()
     result, override = await asyncio.to_thread(
         run_with_memory_hooks,
         lambda: session.execute_command(request.command, request.timeout),
@@ -68,7 +71,8 @@ async def execute_command(
         success=success,
         output=getattr(result, "output", None),
         error=error,
-        error_kind=kind_for(error, session_manager, override=override),
+        error_kind=kind_for(error, session_manager, override=override)
+        or (None if success else memory_kind_since(session, started)),
         subgoal_error=getattr(result, "subgoal_error", None),
         subgoals=getattr(result, "subgoals", []) or [],
         execution_time=float(getattr(result, "execution_time", 0.0) or 0.0),
@@ -86,6 +90,7 @@ async def verify_chunk(
         request.timeout,
         preview(request.chunk, Logging.COMMAND_PREVIEW_CHARS),
     )
+    started = time.time()
     result, override = await asyncio.to_thread(
         run_with_memory_hooks,
         lambda: session.verify_chunk(request.chunk, request.timeout),
@@ -117,7 +122,7 @@ async def verify_chunk(
         success, error_text = False, PROVER_DIED_TEXT
     error_kind = kind_for(
         error_text, session_manager, timed_out=timed_out, override=override
-    )
+    ) or (None if success else memory_kind_since(session, started))
     logger.info(
         "verify_chunk done success=%s proof_open=%s pending_qed=%s used_sorry=%s timed_out=%s commands=%s stuck_line=%s",
         success, proof_open, pending_qed, used_sorry, timed_out, len(commands), stuck_line,
@@ -153,6 +158,7 @@ async def load_document(
         request.report,
         preview(request.text, Logging.COMMAND_PREVIEW_CHARS),
     )
+    started = time.time()
     result, override = await asyncio.to_thread(
         run_with_memory_hooks,
         lambda: session.load_document(
@@ -174,12 +180,15 @@ async def load_document(
     )
     success = bool(getattr(result, "success", False)) and override is None
     error = PROVER_DIED_TEXT if override else getattr(result, "error", None)
+    # commands the memory guard cancelled (memory_guard.py): marked in the report
+    memory = annotate_report(session, (session.last_chunk_report or {}).get("report"), started)
     return DocumentLoadResponse(
         success=success,
         theory=session.entered_thy,
         output=getattr(result, "output", None),
         error=error,
-        error_kind=kind_for(error, session_manager, override=override),
+        error_kind=kind_for(error, session_manager, override=override)
+        or ("memory" if memory else None),
         execution_time=float(getattr(result, "execution_time", 0.0) or 0.0),
         report=(
             (session.last_chunk_report or {}).get("report") if request.report else None

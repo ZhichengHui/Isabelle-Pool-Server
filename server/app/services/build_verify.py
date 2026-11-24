@@ -17,6 +17,7 @@ try:
 except ImportError:
     normalise_for_isabelle = None
 
+from server.app.services import build_process
 from server.app.services.theory_parsing import extract_theory_name, parse_theory_header
 
 logger = get_logger(__name__)
@@ -246,7 +247,7 @@ class BuildVerifier:
 
             logger.info("running isabelle build session=%s parent_session=%s", session_name, parent_session)
             proc = await asyncio.create_subprocess_exec(
-                *cmd,
+                *build_process.scoped(cmd),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )

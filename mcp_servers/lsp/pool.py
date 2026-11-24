@@ -299,6 +299,15 @@ class LspPool(GymClientMixin):
                     timeout=Config.LOAD_TIMEOUT, lease_id=binding.lease_id,
                     master_dir=master_dir_of(canon), keep_on_timeout=True,
                 )
+            if result.get("error_kind") == "prover_died":
+                # the session's prover is gone (killed at its memory limit): the server has
+                # discarded the session; the next call reloads the file on a new one (404 ->
+                # rebind). The stale report of the dead session is not shown.
+                binding.cached_text = None
+                binding.last_report = {"commands": [], "success": False,
+                                       "error_kind": "prover_died", "error": result.get("error")}
+                binding.running_since = {}
+                return True
             binding.cached_text = text
             binding.last_report = result.get("report") or {}
             running = {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -13,7 +14,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 from server.app.api.v1.router import router as api_router
 from server.app.core import metrics
-from server.app.core.config import API, Logging, Server
+from server.app.core.config import API, Logging, Memory, Server
 from server.app.core.logging import get_logger, reset_logging_context, set_logging_context, setup_logging
 from server.app.errors import (
     GatewayUnavailable,
@@ -29,7 +30,8 @@ from server.app.errors import (
     SessionStartError,
     SessionStartTimeout,
 )
-from server.app.services import import_heap
+from server.app.services import cgroup_scope, import_heap, memory_guard
+from server.app.services.heap_pool import default_isabelle
 from server.app.services.import_heap import ImportHeapBuilding, ImportHeapFailed
 from server.app.services.session_manager import SessionManager
 from server.app.services.heap_pool import HeapPool, HeapPoolError
@@ -43,9 +45,16 @@ async def lifespan(app: FastAPI):
     with_startup = time.time()
     logger.info("application startup initiated")
     sm = SessionManager()  # uses Server.IDLE_TIMEOUT_SECONDS, DEFAULT_POOL_SIZE, INITIAL_SESSIONS from config
+    guard = None
     try:
+        # cgroup scopes (D3/D4): decided before the gateway JVM starts (it reads the policy)
+        await asyncio.to_thread(cgroup_scope.init)
         await sm.startup()
         sm.start_cleanup_task()
+        maxheap = await asyncio.to_thread(
+            memory_guard.effective_maxheap_mb, default_isabelle(), Memory.ML_MAXHEAP_MB)
+        guard = memory_guard.GUARD = memory_guard.MemoryGuard(sm, maxheap)
+        guard.start()  # soft heap limit per session (D2)
         app.state.session_manager = sm
         # Heap pool (Stage 3): registry rebuilt from persisted manifests.
         app.state.heap_pool = HeapPool()
@@ -62,6 +71,8 @@ async def lifespan(app: FastAPI):
         shutdown_start = time.time()
         logger.info("application shutdown initiated")
         try:
+            if guard is not None:
+                await guard.stop()
             await import_heap.BUILDER.cancel_all()  # no isabelle build outlives the server
             await sm.shutdown()
         finally:

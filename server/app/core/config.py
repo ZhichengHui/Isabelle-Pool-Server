@@ -106,7 +106,9 @@ class Heap:
     # State dir lives under the Isabelle user dir (the isabelle_user_data
     # volume in the container) so manifests survive container restarts.
     STATE_DIR: Final = os.getenv("ISABELLE_HEAP_POOL_DIR", os.path.join(_ISABELLE_USER_DIR, "heap_pool"))
-    MAX_CONCURRENT_BUILDS: Final = int(os.getenv("ISABELLE_MAX_CONCURRENT_BUILDS", "1"))
+    # ONE global bound for heap-pool and import-heap builds together (heap_pool.py and
+    # import_heap.py share build_process.BUILD_SLOTS; efficiency plan D4). Default 4.
+    MAX_CONCURRENT_BUILDS: Final = int(os.getenv("ISABELLE_MAX_CONCURRENT_BUILDS", "4"))
     BUILD_TIMEOUT_S: Final = float(_heap_env("BUILD_TIMEOUT_S", "3600"))
     DEFAULT_TASK_GROUP: Final = "default"
     # Remove the on-disk heap image + build logs when a heap record is deleted
@@ -218,7 +220,20 @@ class Memory:
     SESSION_ESTIMATE_MB: Final = int(
         os.getenv("ISABELLE_MEMORY_SESSION_ESTIMATE_MB", "2048")
     )
-    ML_MAXHEAP_MB: Final = int(os.getenv("ISABELLE_ML_MAXHEAP_MB", "9216"))
+    ML_MAXHEAP_MB: Final = int(os.getenv("ISABELLE_ML_MAXHEAP_MB", "16384"))
+    # Memory guard (services/memory_guard.py, efficiency plan D2): every GUARD_INTERVAL_S
+    # the heap in use of each session's ML process (size_heap - size_heap_free_last_GC,
+    # Isabelle's runtime statistics, read without the prover's workers) is compared with
+    # GUARD_HEAP_FRACTION x ML_MAXHEAP_MB; above it, the session's running candidates are
+    # cancelled (cancelled_memory), else its running file commands (error_kind "memory").
+    GUARD_INTERVAL_S: Final = float(os.getenv("ISABELLE_MEMORY_GUARD_INTERVAL_S", "5"))
+    GUARD_HEAP_FRACTION: Final = float(os.getenv("ISABELLE_MEMORY_GUARD_HEAP_FRACTION", "0.75"))
+    # cgroup limits (services/cgroup_scope.py, D3/D4): "auto" puts every session prover and
+    # every `isabelle build` into its own systemd scope when `systemd-run --user` works at
+    # start-up (else no scope and a warning); "off" never does.
+    CGROUP_SCOPES: Final = os.getenv("ISABELLE_CGROUP_SCOPES", "auto").strip().lower()
+    SESSION_MEMORY_MAX: Final = os.getenv("ISABELLE_SESSION_MEMORY_MAX", "24G")
+    BUILD_MEMORY_MAX: Final = os.getenv("ISABELLE_BUILD_MEMORY_MAX", "32G")
     JVM_HEAP_MB: Final = Repl.GATEWAY_JVM_HEAP_MB
     SERVER_START_RETRIES: Final = int(os.getenv("ISABELLE_SERVER_START_RETRIES", "5"))
     # Session teardown -> cgroup accounting is not instantaneous (poly exit +

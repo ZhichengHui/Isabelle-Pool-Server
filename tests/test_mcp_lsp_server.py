@@ -746,3 +746,40 @@ def test_still_running_is_attached_only_after_a_timed_out_load(tmp_path, monkeyp
     binding.last_report = {"success": True, "commands": []}
     assert lsp_server._attach_still_running('{"a": 1}', str(f)) == '{"a": 1}'
 
+
+
+# ---------------------------------------------------- stage D: memory limits
+
+def test_a_prover_killed_at_its_memory_limit_is_shown_and_the_file_reloaded(tmp_path):
+    """load_document answers error_kind=prover_died (the session's prover was killed, e.g. by
+    its cgroup limit): the diagnostics say so instead of a stale report, and the next call
+    loads the file again (the server answers 404 for the discarded session -> new session)."""
+    f = tmp_path / "T.thy"
+    f.write_text("theory T imports Main begin\nlemma t: True by simp\nend\n")
+    pool = _pool_with_fake()
+    fake = pool._client
+    real_load = fake.load_document
+    died = {"n": 1}
+
+    async def load(session_id, text, **kw):
+        out = await real_load(session_id, text, **kw)
+        if died["n"]:
+            died["n"] -= 1
+            return {"success": False, "error": "prover process died", "error_kind": "prover_died",
+                    "report": {"success": True, "commands": []}}
+        return out
+
+    fake.load_document = load
+
+    async def run():
+        binding = await pool.get_binding(str(f))
+        await pool.sync(binding)
+        first = dict(binding.last_report)
+        fake.fail_next_load_404 = True  # the server discarded the dead session
+        reloaded = await pool.sync(binding)  # same text: reloaded anyway
+        return binding, first, reloaded
+
+    binding, first, reloaded = asyncio.run(run())
+    assert first["error_kind"] == "prover_died" and first["error"] == "prover process died"
+    assert reloaded is True and binding.session_id == "s2"
+    assert binding.last_report == {"success": True, "commands": []}

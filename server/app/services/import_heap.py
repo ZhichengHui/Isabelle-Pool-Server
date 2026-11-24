@@ -194,7 +194,6 @@ class Builder:
     def __init__(self, isabelle: Optional[str] = None):
         self.isabelle = isabelle
         self._jobs: Dict[str, _Job] = {}
-        self._sem: Optional[asyncio.Semaphore] = None
 
     def _status(self, job: _Job, state: str) -> Dict[str, Any]:
         started, finished = _progress(job.log_path)
@@ -246,15 +245,13 @@ class Builder:
         job.task = asyncio.get_running_loop().create_task(self._run(job))
 
     async def _run(self, job: _Job) -> None:
-        if self._sem is None:
-            self._sem = asyncio.Semaphore(Heap.MAX_CONCURRENT_BUILDS)
         isabelle = self.isabelle or image_select._isabelle()
         cmd = [isabelle, "build", "-b", "-v"]
         for d in job.plan.dirs:
             cmd += ["-d", d]
         cmd.append(job.plan.name)
         try:
-            async with self._sem:
+            async with build_process.build_slots():
                 job.started_at = time.time()  # queued time is not build time
                 logger.info("import heap build started: %s", " ".join(cmd))
                 job.returncode, _ = await build_process.run(cmd, job.log_path)
