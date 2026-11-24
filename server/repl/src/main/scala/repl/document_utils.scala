@@ -646,82 +646,7 @@ object Document_Utils {
     }
   }
 
-  // -----------------------------------------------------------------------
-  // Overlay query machinery (style-4): attach a registered print function to an
-  // EXISTING host command, poll for the instance's finished status marker,
-  // collect instance-tagged results, remove the overlay. No text edits — the
-  // document, rollback chain, and history are untouched. Used by the LSP-like
-  // sledgehammer_at (host = command at a line) AND, since 2026-09-30, by every
-  // "current state" query of Backend_Probes (host = current_state_host).
-  // -----------------------------------------------------------------------
-
-  /** Host command for a "current state" overlay query: the node's LAST non-ignored
-   *  command — its result state is the current toplevel state, exactly what a
-   *  command appended at the tip would see. With `skip_end` a trailing theory `end`
-   *  is skipped, so the query observes the state the theory closed with (after `end`
-   *  there is no theory context at all). None when the node has no command. Uses a
-   *  fresh stable snapshot WITHOUT waiting for consolidation: the overlay's own
-   *  deadline loop bounds the wait for a still-running host. */
-  def current_state_host(
-      session: Headless.Session,
-      node_name: Document.Node.Name,
-      skip_end: Boolean
-  ): Option[Command] = {
-    val snapshot = node_snapshot(session, node_name)
-    snapshot.node.commands.reverse.iterator
-      .find(command => !command.is_ignored && !(skip_end && command.span.name == "end"))
-  }
-
-  /** Result of an overlay query: (finished-in-budget, content lines, error lines).
-   *  Each `writeln_result` on the ML side is one content line, in call order. */
-  def overlay_query(
-      session: Headless.Session,
-      node_name: Document.Node.Name,
-      host: Command,
-      print_fn: String,
-      args: List[String],
-      budget_ms: Long
-  ): (Boolean, List[String], List[String]) = {
-    val instance = Document_ID.make().toString
-    val overlays = Document.Node.Overlays.empty.insert(host, print_fn, instance :: args)
-    session.update(Document.Blobs.empty, List(
-      node_name -> Document.Node.Perspective[Text.Edit, Text.Perspective](
-        true, Text.Perspective.full, overlays)))
-    try {
-      val deadline = System.currentTimeMillis() + budget_ms
-      var done = false
-      while (!done && System.currentTimeMillis() < deadline) {
-        session.output_delay.sleep()
-        val snap = session.await_stable_snapshot().switch(node_name)
-        done = snap.command_results(host).iterator.toList.exists {
-          case (_, XML.Elem(Markup(Markup.RESULT, props), List(XML.Elem(m, _))))
-            if Markup.Instance.unapply(props).contains(instance) => m.name == Markup.FINISHED
-          case _ => false
-        }
-      }
-      val snap = session.await_stable_snapshot().switch(node_name)
-      var content = List.empty[String]
-      var errors = List.empty[String]
-      for (case (_, XML.Elem(Markup(Markup.RESULT, props), body)) <- snap.command_results(host).iterator.toList
-           if Markup.Instance.unapply(props).contains(instance)) {
-        body match {
-          // status markers (running/finished): no content
-          case List(XML.Elem(m, _)) if m.name == Markup.RUNNING || m.name == Markup.FINISHED => ()
-          case List(XML.Elem(m, b)) if m.name == Markup.ERROR =>
-            errors = errors :+ Pretty.string_of(b)
-          case _ =>
-            val text = Pretty.string_of(body)
-            if (text.nonEmpty) content = content :+ text
-        }
-      }
-      (done, content, errors)
-    } finally {
-      // ALWAYS remove the overlay (restore the node's original empty perspective)
-      session.update(Document.Blobs.empty, List(
-        node_name -> Document.Node.Perspective[Text.Edit, Text.Perspective](
-          true, Text.Perspective.empty, Document.Node.Overlays.empty)))
-    }
-  }
+  // Overlay queries (the machinery lives in overlay_registry.scala: Overlay_Queries).
 
   /** Sledgehammer at a 1-based line via the `isabelle_pool_server_sledgehammer` overlay op
    *  (REPL.ML). Host = the command containing the line (jEdit cursor semantics);
@@ -730,6 +655,7 @@ object Document_Utils {
    *  goal. Consumed via POST .../sledgehammer_at by both MCPs. */
   def sledgehammer_at_json(
       session: Headless.Session,
+      registry: Overlay_Registry,
       node_name: Document.Node.Name,
       line: Int,
       subgoal: Int,
@@ -738,11 +664,11 @@ object Document_Utils {
     command_containing_line(session, node_name, line) match {
       case None => Json_Reports.line_query_not_found(s"no command at line $line")
       case Some((_, _, command, _)) =>
-        val (done, content, errors) = overlay_query(
-          session, node_name, command,
+        val (done, content, errors) = Overlay_Queries.overlay_query(
+          session, registry, node_name, command,
           "isabelle_pool_server_sledgehammer_query",
           List(timeout_s.toString, subgoal.toString),
-          (timeout_s + 30).toLong * 1000L)
+          timeout_s.toLong * 1000L + Backend_Probes.SLEDGEHAMMER_GRACE_MS)
         if (!done)
           JSON.Format(JSON.Object(
             "found" -> false,
@@ -766,6 +692,7 @@ object Document_Utils {
    *  {found:false, subgoals, error}. */
   def sledgehammer_at_command_json(
       session: Headless.Session,
+      registry: Overlay_Registry,
       node_name: Document.Node.Name,
       index: Int,
       subgoal: Int,
@@ -783,8 +710,8 @@ object Document_Utils {
         JSON.Format(JSON.Object("found" -> false, "subgoals" -> 0,
           "error" -> s"command $index is not a proper command"))
       else {
-        val (done, content, errors) = overlay_query(
-          session, node_name, command,
+        val (done, content, errors) = Overlay_Queries.overlay_query(
+          session, registry, node_name, command,
           "isabelle_pool_server_sledgehammer_fill_query",
           List(timeout_s.toString, subgoal.toString, max_proofs.toString, provers),
           (timeout_s + 30).toLong * 1000L)

@@ -1,6 +1,7 @@
 """Position-based (jEdit/LSP-style) read-only queries on the current
-document: command at line, goals at line, hover, definition, and the
-overlay-driven sledgehammer at a line."""
+document: command at line, goals at line, hover, definition, the
+overlay-driven sledgehammer at a line, and candidate proofs at a line
+(attempt)."""
 import asyncio
 import time
 
@@ -10,8 +11,12 @@ from server.app.core.config import Server
 from server.app.core.logging import get_logger
 from server.app.services.success_checker import SH_PROVED, classify_sledgehammer
 
+from server.app.errors import SessionNotFound
+from server.app.services.session_attempt import ATTEMPT_TIMEOUT_MAX_S, effective_timeout
+
 from ..deps import LeasedSession, SessionManagerDep, sledgehammer_slot
-from ..memory_hooks import track_atps
+from ..memory_hooks import PROVER_DIED_TEXT, run_with_memory_hooks, track_atps
+from ..schemas.attempt_models import AttemptRequest, AttemptResponse
 from ..schemas.API_models import (
     CommandAtLineResponse,
     DefinitionResponse,
@@ -121,4 +126,46 @@ async def sledgehammer_at(
         execution_time=time.time() - start,
         outcome=outcome,
         method=method,
+    )
+
+
+@router.post("/api/v1/sessions/{session_id}/attempt", response_model=AttemptResponse)
+async def attempt(
+    request: AttemptRequest,
+    session: LeasedSession,
+    session_manager: SessionManagerDep,
+):
+    """Try candidate proofs at a line, in this session (overlay queries; no text edits):
+    each candidate continues from the state after the last command that ends before
+    `line`, the candidates run in parallel (at most 8 at once), each within `timeout_s`
+    (default 30, capped at 300). Candidates with ML commands are refused like
+    documents are. See services/session_attempt.py."""
+    start = time.time()
+    timeout_s, capped = effective_timeout(request.timeout_s)
+    answer, override = await asyncio.to_thread(
+        run_with_memory_hooks,
+        lambda: session.attempt(request.line, request.candidates, timeout_s),
+        session,
+        session_manager,
+    )
+    if override or answer is None:
+        raise SessionNotFound(PROVER_DIED_TEXT)
+    for cand in answer.get("candidates") or []:
+        rep = cand.get("report")
+        if rep:
+            if rep.get("subgoals") is not None:
+                rep["subgoals"] = [to_ascii(str(g)) for g in rep["subgoals"]]
+            for cmd in rep.get("commands") or []:
+                for m in cmd.get("messages") or []:
+                    m["text"] = to_ascii(m.get("text"))
+    note = (f"timeout {request.timeout_s} s is above the server cap; the candidates ran "
+            f"with {ATTEMPT_TIMEOUT_MAX_S} s") if capped else None
+    return AttemptResponse(
+        fallback=answer.get("fallback"),
+        host_line=answer.get("host_line"),
+        timeout_s=timeout_s,
+        timeout_capped=capped,
+        note=note,
+        candidates=answer.get("candidates") or [],
+        execution_time=time.time() - start,
     )

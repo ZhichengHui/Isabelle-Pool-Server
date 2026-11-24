@@ -16,6 +16,7 @@ import isabelle._
  *                                                   overlay queries, no document edits.
  *    - Backend_Chunk_Ops (backend_chunk_ops.scala) — chunk-centric execution surface.
  *    - Backend_File_Ops  (backend_file_ops.scala)  — LSP-like file-sync surface.
+ *    - Backend_Attempts  (backend_attempts.scala)  — candidate proofs as overlays in the file session.
  *
  *  All backends share the gateway JVM but each owns its own Isabelle session
  *  (own poly process, own PIDE document), so no per-backend routing of ML
@@ -25,7 +26,8 @@ class ReplBackend(show_states: Boolean, enable_cache: Boolean = false, max_cache
     extends Backend_Lifecycle
     with Backend_Probes
     with Backend_Chunk_Ops
-    with Backend_File_Ops {
+    with Backend_File_Ops
+    with Backend_Attempts {
   // protected (not private) so the mixed-in traits can reach them via the
   // self-type; still off the Py4J-callable public surface.
   protected val session_manager_instance = session_manager.getOrElse(new Session_Manager(show_states, enable_cache, max_cache_size))
