@@ -30,7 +30,7 @@ def _fresh(monkeypatch):
     pool = lsp_server.pool
     fake = GoalFakeClient()
     for name, value in [("_bindings", {}), ("_scratch", {}), ("_scratch_counts", {}),
-                        ("_client", fake)]:
+                        ("_client", fake), ("registry", type(pool.registry)())]:
         monkeypatch.setattr(pool, name, value)
     return lsp_app, fake
 

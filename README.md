@@ -149,6 +149,16 @@ curl http://localhost:8000/            # version, gateway_alive, active/busy ses
   deterministic ETA, and the patched proof text in the result. The LSP MCP wraps it as
   `isabelle_fill_sorries` / `isabelle_fill_status` / `isabelle_fill_cancel` (mcp_servers/lsp/README.md), and
   `GET /api/v1/memory` rows attribute the solvers a step spawns to its session (`sledgehammer_mb`).
+- Candidate proofs in the file's session: `POST …/attempt` (`{line, candidates, timeout_s?}`) runs each
+  candidate as an overlay query on the last command that ends before `line` — no text edit, no new
+  session, no re-check of the text before `line`. As many candidates run at once as the session has
+  worker threads (`ISABELLE_SESSION_THREADS`, default 4), the rest wait; each within `timeout_s`
+  (default 30, capped at 300; wall time, removed 15 s later if still running). The answer has one
+  report per candidate (the shape of a document report of "text before `line` + candidate") with
+  `elapsed_s` and `cancelled`, or a `fallback` reason when the candidate cannot run there (a line
+  inside a command or in the header, after `end`; a candidate with `end`, `theory` or a file-loading
+  command). The LSP MCP's `isabelle_multi_attempt` uses it and checks the fallbacks on a scratch
+  session.
 
 ### 2. The HTTP API in four calls
 
@@ -367,7 +377,8 @@ verify_chunk("  show ?thesis by (metis ...)\nqed")
 | `ISABELLE_MCP_HOST` / `ISABELLE_MCP_PORT` | `127.0.0.1` / `8848` | HTTP transport bind |
 
 The lsp server takes the same names with the `ISABELLE_MCP_LSP_` prefix (plus its own
-`LOAD_TIMEOUT`, `ATTEMPT_TIMEOUT`, `SCRATCH_POOL_SIZE`, `TASK_GROUP`, `CLOSE_DESTROYS`).
+`LOAD_TIMEOUT`, `ATTEMPT_TIMEOUT` (default 30 s per multi_attempt candidate), `SCRATCH_POOL_SIZE`,
+`TASK_GROUP`, `CLOSE_DESTROYS`).
 
 #### MCP smoke test
 

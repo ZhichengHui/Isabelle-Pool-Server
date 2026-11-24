@@ -92,7 +92,7 @@ def _candidate_report(line: int, prefix: Dict[str, Any], cand: Dict[str, Any]) -
     success = (not timed_out and bool(prefix.get("all_ok")) and cand_ok
                and bool(cand.get("finished")))
     proof_open = success and bool(cand.get("in_proof"))
-    goals = list(cand.get("goals") or [])
+    goals = [str(g).strip() for g in cand.get("goals") or []]  # as session.open_subgoals
     return {
         "success": success,
         "timed_out": timed_out,
