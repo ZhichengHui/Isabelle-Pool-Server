@@ -36,6 +36,11 @@ class FakeClient:
         self.next_reports = []  # reports load_document returns, in order (then the default)
         self.last_memory_state = "ok"
         self.fail_create_503 = False  # create_session raises a memory 503
+        # answers of POST .../attempt (isabelle_multi_attempt in the file session), in order;
+        # with none left the server answers `fallback: no_host`, so the candidates go to the
+        # scratch-session path (the one these fakes script with next_reports)
+        self.attempt_answers = []
+        self.attempts = []
 
     async def memory_status(self):
         return {
@@ -133,6 +138,13 @@ class FakeClient:
 
     async def goals_at_line(self, session_id, line, lease_id=None):
         return {"found": True, "goals_after": ["True"]}
+
+    async def attempt(self, session_id, line, candidates, timeout_s=None, lease_id=None):
+        self.attempts.append({"session_id": session_id, "line": line,
+                              "candidates": list(candidates), "timeout_s": timeout_s})
+        if self.attempt_answers:
+            return self.attempt_answers.pop(0)
+        return {"fallback": "no_host", "candidates": [], "timeout_s": 30}
 
 
 def _pool_with_fake():

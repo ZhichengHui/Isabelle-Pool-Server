@@ -2,7 +2,7 @@
 
 The server closes a leased session that was neither used nor renewed for
 ``ISABELLE_MAX_LEASE_AGE`` seconds (the abandoned-lease rule). Sessions this MCP
-holds without using them for a while — warm scratch sessions and spares, or an
+holds without using them for a while — warm scratch sessions, or an
 open file while a long check of another file runs — would otherwise be closed
 under it. One background task renews every lease in the registry every
 ``Config.LEASE_RENEW_S`` seconds; when the MCP process dies, the renewals stop

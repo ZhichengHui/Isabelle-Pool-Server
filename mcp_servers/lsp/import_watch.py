@@ -123,7 +123,6 @@ async def refresh(pool: Any, binding: Any, now: State) -> None:
     binding.cached_text = None
     binding.last_report = None
     binding.running_since = {}
-    binding.spare_scheduled = False
     binding.heap_note = join_notes(
         f"Imported theories changed since this file was opened ({names}): it was reopened on "
         "a new session with their current versions, and checked again from the start.",

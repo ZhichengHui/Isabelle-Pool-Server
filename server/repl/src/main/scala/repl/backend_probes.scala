@@ -16,7 +16,7 @@ import isabelle._
  *  against that command's result state — which IS the current toplevel state,
  *  exactly what an appended command would see — and its instance-tagged
  *  results are read from the host's command_results
- *  (`Document_Utils.overlay_query`, the machinery `sledgehammer_at` already
+ *  (`Overlay_Queries.overlay_query`, the machinery `sledgehammer_at` already
  *  used). The document, rollback chain and command history are never touched,
  *  so there is nothing to discard and no probe can leak into the script. (The
  *  previous design inserted `ML_val ‹Repl.send_*_tagged …›` commands and read
@@ -48,7 +48,7 @@ object Backend_Probes {
     sys.env.get("ISABELLE_REPL_GLOBAL_FACTS_TIMEOUT_MINUTES").flatMap(_.toLongOption).getOrElse(5L) * 60000L
   /** Grace added to the Isabelle-level sledgehammer timeout (the ATP budget)
    *  before the overlay is abandoned: prover start-up and result relay. */
-  val SLEDGEHAMMER_GRACE_MS: Long = 30000L
+  val SLEDGEHAMMER_GRACE_MS: Long = 15000L
   /** Budget for the memory probe (`mem_stats`): it runs in the request path
    *  after ordinary commands, so a distressed prover must cost at most this
    *  much extra, not the 20 s subgoal budget. */
@@ -92,17 +92,25 @@ trait Backend_Probes { this: ReplBackend =>
   /** Memory facts of this session's ML process (REPL.ML `Repl.mem_stats`):
    *  `pid` (from /proc/self; absent on non-Linux hosts) and the Poly/ML
    *  runtime statistics (`size_heap`, `size_heap_free_last_GC`, ...), as a
-   *  key -> value map. Empty before the first theory command — the overlay
-   *  needs a host command — except for a previously seen pid. Hosted before a
-   *  trailing `end` like the fact queries. Raises on budget expiry
-   *  (`MEM_BUDGET_MS`), which the Python side counts as a failed sample. */
+   *  key -> value map. Empty until a command of the theory has finished — the
+   *  overlay needs a host — except for a previously seen pid. Hosted on the FIRST
+   *  finished command (not the last one: a long command still running at the end
+   *  of the document, or an attempt in progress, must not delay the probe). On
+   *  budget expiry (`MEM_BUDGET_MS`) the map holds an `error` entry, which the
+   *  Python side counts as a failed sample. */
   def mem_stats(): java.util.Map[String, String] = {
     val lines =
       if (!repl_session.current_thy_begun) List()
       else
-        try state_query("isabelle_pool_server_mem_query", Nil, MEM_BUDGET_MS,
-              skip_end = repl_session.current_thy_ended)
-        catch { case ERROR(msg) => List("error=" + msg) }  // never a traceback per interval
+        repl_session.first_finished_host match {
+          case None => List()
+          case Some(host) =>
+            val (done, content, errors) =
+              repl_session.overlay_query(host, "isabelle_pool_server_mem_query", Nil, MEM_BUDGET_MS)
+            if (!done) List(s"error=Timeout waiting for the memory probe (budget ${MEM_BUDGET_MS} ms)")
+            else if (errors.nonEmpty) List("error=" + errors.head)  // never a traceback per interval
+            else content
+        }
     val facts = new java.util.LinkedHashMap[String, String]()
     for (line <- lines) {
       val i = line.indexOf('=')

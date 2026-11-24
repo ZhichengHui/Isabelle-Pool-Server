@@ -28,14 +28,9 @@ def _capture_server_logs(caplog):
 
 
 @pytest.fixture(autouse=True)
-def _no_scratch_spares(monkeypatch):
-    """The LSP MCP prepares spare scratch sessions in the background
-    (mcp_servers/lsp/scratch_spare.py); a test that scripts a fake client's
-    responses or counts its sessions would see those extra calls. Off by
-    default; tests/test_mcp_lsp_scratch_spare.py turns it on."""
+def _no_lease_renewal(monkeypatch):
+    """The LSP MCP's lease-renewal loop (mcp_servers/lsp/lease_renewal.py) would add
+    calls to a fake client's log; off by default, its own tests turn it on."""
     from mcp_servers.lsp.config import Config
 
-    monkeypatch.setattr(Config, "SCRATCH_SPARE", 0)
-    # Likewise the lease-renewal loop (mcp_servers/lsp/lease_renewal.py); its own
-    # tests turn it on.
     monkeypatch.setattr(Config, "LEASE_RENEW_S", 0.0)

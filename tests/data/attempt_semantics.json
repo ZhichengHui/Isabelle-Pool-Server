@@ -1,0 +1,913 @@
+{
+ "about": "Recorded 2026-11-24 on PGR (claude-work/2026-11-24-impl-search-in-session/semantics.py): `old` = isabelle_multi_attempt of the scratch-session implementation (63afb19), `answer` = POST /attempt of the new server, same file and cases.",
+ "cases": [
+  {
+   "name": "single_command",
+   "file_name": "Sem.thy",
+   "text": "theory Sem\n  imports Main\nbegin\n\nlemma a: \"rev (rev xs) = (xs::nat list)\"\n  by simp\n\nlemma b: \"length (xs @ ys) = length ys + length (xs::nat list)\"\n  sorry\n\nlemma c:\n  \"(xs::nat list) @ [] = xs\"\n  by simp\n\nlemma bad: \"rev xs = (xs::nat list)\"\n  by simp\n\nlemma d: \"True\"\n  by simp\n\nend\n",
+   "line": 9,
+   "candidates": [
+    "  by simp"
+   ],
+   "timeout": null,
+   "old": [
+    {
+     "verdict": "ok",
+     "subgoals": null
+    }
+   ],
+   "answer": {
+    "fallback": null,
+    "host_line": 8,
+    "timeout_s": 30,
+    "timeout_capped": false,
+    "note": null,
+    "candidates": [
+     {
+      "candidate": "  by simp",
+      "fallback": null,
+      "command": null,
+      "report": {
+       "success": true,
+       "timed_out": false,
+       "proof_open": false,
+       "pending_qed": false,
+       "used_sorry": false,
+       "sorry_lines": [],
+       "commands": [
+        {
+         "node_line": 9,
+         "line": 9,
+         "kind": "by",
+         "status": "ok",
+         "messages": []
+        }
+       ],
+       "subgoals": null
+      },
+      "elapsed_s": 0.006,
+      "cancelled": null
+     }
+    ],
+    "execution_time": 0.10480690002441406
+   }
+  },
+  {
+   "name": "several_commands_done",
+   "file_name": "Sem.thy",
+   "text": "theory Sem\n  imports Main\nbegin\n\nlemma a: \"rev (rev xs) = (xs::nat list)\"\n  by simp\n\nlemma b: \"length (xs @ ys) = length ys + length (xs::nat list)\"\n  sorry\n\nlemma c:\n  \"(xs::nat list) @ [] = xs\"\n  by simp\n\nlemma bad: \"rev xs = (xs::nat list)\"\n  by simp\n\nlemma d: \"True\"\n  by simp\n\nend\n",
+   "line": 9,
+   "candidates": [
+    "  apply (induct xs)\n   apply simp_all\n  done"
+   ],
+   "timeout": null,
+   "old": [
+    {
+     "verdict": "ok",
+     "subgoals": null
+    }
+   ],
+   "answer": {
+    "fallback": null,
+    "host_line": 8,
+    "timeout_s": 30,
+    "timeout_capped": false,
+    "note": null,
+    "candidates": [
+     {
+      "candidate": "  apply (induct xs)\n   apply simp_all\n  done",
+      "fallback": null,
+      "command": null,
+      "report": {
+       "success": true,
+       "timed_out": false,
+       "proof_open": false,
+       "pending_qed": false,
+       "used_sorry": false,
+       "sorry_lines": [],
+       "commands": [
+        {
+         "node_line": 9,
+         "line": 9,
+         "kind": "apply",
+         "status": "ok",
+         "messages": []
+        },
+        {
+         "node_line": 10,
+         "line": 10,
+         "kind": "apply",
+         "status": "ok",
+         "messages": []
+        },
+        {
+         "node_line": 11,
+         "line": 11,
+         "kind": "done",
+         "status": "ok",
+         "messages": []
+        }
+       ],
+       "subgoals": null
+      },
+      "elapsed_s": 0.02,
+      "cancelled": null
+     }
+    ],
+    "execution_time": 0.10482215881347656
+   }
+  },
+  {
+   "name": "ends_with_qed",
+   "file_name": "Sem.thy",
+   "text": "theory Sem\n  imports Main\nbegin\n\nlemma a: \"rev (rev xs) = (xs::nat list)\"\n  by simp\n\nlemma b: \"length (xs @ ys) = length ys + length (xs::nat list)\"\n  sorry\n\nlemma c:\n  \"(xs::nat list) @ [] = xs\"\n  by simp\n\nlemma bad: \"rev xs = (xs::nat list)\"\n  by simp\n\nlemma d: \"True\"\n  by simp\n\nend\n",
+   "line": 9,
+   "candidates": [
+    "  proof (induct xs)\n  case Nil then show ?case by simp\nnext\n  case (Cons a xs) then show ?case by simp\nqed"
+   ],
+   "timeout": null,
+   "old": [
+    {
+     "verdict": "ok",
+     "subgoals": null
+    }
+   ],
+   "answer": {
+    "fallback": null,
+    "host_line": 8,
+    "timeout_s": 30,
+    "timeout_capped": false,
+    "note": null,
+    "candidates": [
+     {
+      "candidate": "  proof (induct xs)\n  case Nil then show ?case by simp\nnext\n  case (Cons a xs) then show ?case by simp\nqed",
+      "fallback": null,
+      "command": null,
+      "report": {
+       "success": true,
+       "timed_out": false,
+       "proof_open": false,
+       "pending_qed": false,
+       "used_sorry": false,
+       "sorry_lines": [],
+       "commands": [
+        {
+         "node_line": 9,
+         "line": 9,
+         "kind": "proof",
+         "status": "ok",
+         "messages": []
+        },
+        {
+         "node_line": 10,
+         "line": 10,
+         "kind": "case",
+         "status": "ok",
+         "messages": []
+        },
+        {
+         "node_line": 10,
+         "line": 10,
+         "kind": "then",
+         "status": "ok",
+         "messages": []
+        },
+        {
+         "node_line": 10,
+         "line": 10,
+         "kind": "show",
+         "status": "ok",
+         "messages": []
+        },
+        {
+         "node_line": 10,
+         "line": 10,
+         "kind": "by",
+         "status": "ok",
+         "messages": []
+        },
+        {
+         "node_line": 11,
+         "line": 11,
+         "kind": "next",
+         "status": "ok",
+         "messages": []
+        },
+        {
+         "node_line": 12,
+         "line": 12,
+         "kind": "case",
+         "status": "ok",
+         "messages": []
+        },
+        {
+         "node_line": 12,
+         "line": 12,
+         "kind": "then",
+         "status": "ok",
+         "messages": []
+        },
+        {
+         "node_line": 12,
+         "line": 12,
+         "kind": "show",
+         "status": "ok",
+         "messages": []
+        },
+        {
+         "node_line": 12,
+         "line": 12,
+         "kind": "by",
+         "status": "ok",
+         "messages": []
+        },
+        {
+         "node_line": 13,
+         "line": 13,
+         "kind": "qed",
+         "status": "ok",
+         "messages": []
+        }
+       ],
+       "subgoals": null
+      },
+      "elapsed_s": 0.053,
+      "cancelled": null
+     }
+    ],
+    "execution_time": 0.20621728897094727
+   }
+  },
+  {
+   "name": "open_goals",
+   "file_name": "Sem.thy",
+   "text": "theory Sem\n  imports Main\nbegin\n\nlemma a: \"rev (rev xs) = (xs::nat list)\"\n  by simp\n\nlemma b: \"length (xs @ ys) = length ys + length (xs::nat list)\"\n  sorry\n\nlemma c:\n  \"(xs::nat list) @ [] = xs\"\n  by simp\n\nlemma bad: \"rev xs = (xs::nat list)\"\n  by simp\n\nlemma d: \"True\"\n  by simp\n\nend\n",
+   "line": 9,
+   "candidates": [
+    "  apply (induct xs)"
+   ],
+   "timeout": null,
+   "old": [
+    {
+     "verdict": "ok",
+     "subgoals": [
+      "1. length ([] @ ys) = length ys + length []",
+      "2. \\<And>a xs. length (xs @ ys) = length ys + length xs \\<Longrightarrow> length ((a # xs) @ ys) = length ys + length (a # xs)"
+     ]
+    }
+   ],
+   "answer": {
+    "fallback": null,
+    "host_line": 8,
+    "timeout_s": 30,
+    "timeout_capped": false,
+    "note": null,
+    "candidates": [
+     {
+      "candidate": "  apply (induct xs)",
+      "fallback": null,
+      "command": null,
+      "report": {
+       "success": true,
+       "timed_out": false,
+       "proof_open": true,
+       "pending_qed": false,
+       "used_sorry": false,
+       "sorry_lines": [],
+       "commands": [
+        {
+         "node_line": 9,
+         "line": 9,
+         "kind": "apply",
+         "status": "ok",
+         "messages": []
+        }
+       ],
+       "subgoals": [
+        "1. length ([] @ ys) = length ys + length []",
+        "2. \\<And>a xs. length (xs @ ys) = length ys + length xs \\<Longrightarrow> length ((a # xs) @ ys) = length ys + length (a # xs)"
+       ]
+      },
+      "elapsed_s": 0.016,
+      "cancelled": null
+     }
+    ],
+    "execution_time": 0.10599470138549805
+   }
+  },
+  {
+   "name": "pending_qed",
+   "file_name": "Sem.thy",
+   "text": "theory Sem\n  imports Main\nbegin\n\nlemma a: \"rev (rev xs) = (xs::nat list)\"\n  by simp\n\nlemma b: \"length (xs @ ys) = length ys + length (xs::nat list)\"\n  sorry\n\nlemma c:\n  \"(xs::nat list) @ [] = xs\"\n  by simp\n\nlemma bad: \"rev xs = (xs::nat list)\"\n  by simp\n\nlemma d: \"True\"\n  by simp\n\nend\n",
+   "line": 9,
+   "candidates": [
+    "  proof -\n    show ?thesis by simp"
+   ],
+   "timeout": null,
+   "old": [
+    {
+     "verdict": "ok",
+     "subgoals": []
+    }
+   ],
+   "answer": {
+    "fallback": null,
+    "host_line": 8,
+    "timeout_s": 30,
+    "timeout_capped": false,
+    "note": null,
+    "candidates": [
+     {
+      "candidate": "  proof -\n    show ?thesis by simp",
+      "fallback": null,
+      "command": null,
+      "report": {
+       "success": true,
+       "timed_out": false,
+       "proof_open": true,
+       "pending_qed": true,
+       "used_sorry": false,
+       "sorry_lines": [],
+       "commands": [
+        {
+         "node_line": 9,
+         "line": 9,
+         "kind": "proof",
+         "status": "ok",
+         "messages": []
+        },
+        {
+         "node_line": 10,
+         "line": 10,
+         "kind": "show",
+         "status": "ok",
+         "messages": []
+        },
+        {
+         "node_line": 10,
+         "line": 10,
+         "kind": "by",
+         "status": "ok",
+         "messages": []
+        }
+       ],
+       "subgoals": []
+      },
+      "elapsed_s": 0.007,
+      "cancelled": null
+     }
+    ],
+    "execution_time": 0.1051323413848877
+   }
+  },
+  {
+   "name": "failing_step",
+   "file_name": "Sem.thy",
+   "text": "theory Sem\n  imports Main\nbegin\n\nlemma a: \"rev (rev xs) = (xs::nat list)\"\n  by simp\n\nlemma b: \"length (xs @ ys) = length ys + length (xs::nat list)\"\n  sorry\n\nlemma c:\n  \"(xs::nat list) @ [] = xs\"\n  by simp\n\nlemma bad: \"rev xs = (xs::nat list)\"\n  by simp\n\nlemma d: \"True\"\n  by simp\n\nend\n",
+   "line": 9,
+   "candidates": [
+    "  apply (rule refl)\n  done"
+   ],
+   "timeout": null,
+   "old": [
+    {
+     "verdict": "failed",
+     "subgoals": null
+    }
+   ],
+   "answer": {
+    "fallback": null,
+    "host_line": 8,
+    "timeout_s": 30,
+    "timeout_capped": false,
+    "note": null,
+    "candidates": [
+     {
+      "candidate": "  apply (rule refl)\n  done",
+      "fallback": null,
+      "command": null,
+      "report": {
+       "success": false,
+       "timed_out": false,
+       "proof_open": false,
+       "pending_qed": false,
+       "used_sorry": false,
+       "sorry_lines": [],
+       "commands": [
+        {
+         "node_line": 9,
+         "line": 9,
+         "kind": "apply",
+         "status": "failed",
+         "messages": [
+          {
+           "sev": "error",
+           "text": "Failed to apply proof method (line 1):\ngoal (1 subgoal):\n 1. length (xs @ ys) = length ys + length xs"
+          }
+         ]
+        },
+        {
+         "node_line": 10,
+         "line": 10,
+         "kind": "done",
+         "status": "failed",
+         "messages": [
+          {
+           "sev": "error",
+           "text": "Failed to finish proof:\ngoal (1 subgoal):\n 1. length (xs @ ys) = length ys + length xs"
+          }
+         ]
+        }
+       ],
+       "subgoals": null
+      },
+      "elapsed_s": 0.003,
+      "cancelled": null
+     }
+    ],
+    "execution_time": 0.10604238510131836
+   }
+  },
+  {
+   "name": "candidate_sorry_and_oops",
+   "file_name": "Sem.thy",
+   "text": "theory Sem\n  imports Main\nbegin\n\nlemma a: \"rev (rev xs) = (xs::nat list)\"\n  by simp\n\nlemma b: \"length (xs @ ys) = length ys + length (xs::nat list)\"\n  sorry\n\nlemma c:\n  \"(xs::nat list) @ [] = xs\"\n  by simp\n\nlemma bad: \"rev xs = (xs::nat list)\"\n  by simp\n\nlemma d: \"True\"\n  by simp\n\nend\n",
+   "line": 9,
+   "candidates": [
+    "  sorry",
+    "  oops"
+   ],
+   "timeout": null,
+   "old": [
+    {
+     "verdict": "used_sorry",
+     "subgoals": null
+    },
+    {
+     "verdict": "used_sorry",
+     "subgoals": null
+    }
+   ],
+   "answer": {
+    "fallback": null,
+    "host_line": 8,
+    "timeout_s": 30,
+    "timeout_capped": false,
+    "note": null,
+    "candidates": [
+     {
+      "candidate": "  sorry",
+      "fallback": null,
+      "command": null,
+      "report": {
+       "success": true,
+       "timed_out": false,
+       "proof_open": false,
+       "pending_qed": false,
+       "used_sorry": true,
+       "sorry_lines": [
+        9
+       ],
+       "commands": [
+        {
+         "node_line": 9,
+         "line": 9,
+         "kind": "sorry",
+         "status": "ok",
+         "messages": []
+        }
+       ],
+       "subgoals": null
+      },
+      "elapsed_s": 0.001,
+      "cancelled": null
+     },
+     {
+      "candidate": "  oops",
+      "fallback": null,
+      "command": null,
+      "report": {
+       "success": true,
+       "timed_out": false,
+       "proof_open": false,
+       "pending_qed": false,
+       "used_sorry": true,
+       "sorry_lines": [
+        9
+       ],
+       "commands": [
+        {
+         "node_line": 9,
+         "line": 9,
+         "kind": "oops",
+         "status": "ok",
+         "messages": []
+        }
+       ],
+       "subgoals": null
+      },
+      "elapsed_s": 0.0,
+      "cancelled": null
+     }
+    ],
+    "execution_time": 0.1050558090209961
+   }
+  },
+  {
+   "name": "new_lemma_two_candidates",
+   "file_name": "Sem.thy",
+   "text": "theory Sem\n  imports Main\nbegin\n\nlemma a: \"rev (rev xs) = (xs::nat list)\"\n  by simp\n\nlemma b: \"length (xs @ ys) = length ys + length (xs::nat list)\"\n  sorry\n\nlemma c:\n  \"(xs::nat list) @ [] = xs\"\n  by simp\n\nlemma bad: \"rev xs = (xs::nat list)\"\n  by simp\n\nlemma d: \"True\"\n  by simp\n\nend\n",
+   "line": 10,
+   "candidates": [
+    "lemma e: \"(xs::nat list) @ [] = xs\"\n  by simp",
+    "lemma e: \"rev xs = (xs::nat list)\"\n  by simp"
+   ],
+   "timeout": null,
+   "old": [
+    {
+     "verdict": "ok",
+     "subgoals": null
+    },
+    {
+     "verdict": "failed",
+     "subgoals": null
+    }
+   ],
+   "answer": {
+    "fallback": null,
+    "host_line": 9,
+    "timeout_s": 30,
+    "timeout_capped": false,
+    "note": null,
+    "candidates": [
+     {
+      "candidate": "lemma e: \"(xs::nat list) @ [] = xs\"\n  by simp",
+      "fallback": null,
+      "command": null,
+      "report": {
+       "success": true,
+       "timed_out": false,
+       "proof_open": false,
+       "pending_qed": false,
+       "used_sorry": false,
+       "sorry_lines": [
+        9
+       ],
+       "commands": [
+        {
+         "node_line": 10,
+         "line": 10,
+         "kind": "lemma",
+         "status": "ok",
+         "messages": []
+        },
+        {
+         "node_line": 11,
+         "line": 11,
+         "kind": "by",
+         "status": "ok",
+         "messages": []
+        }
+       ],
+       "subgoals": null
+      },
+      "elapsed_s": 0.004,
+      "cancelled": null
+     },
+     {
+      "candidate": "lemma e: \"rev xs = (xs::nat list)\"\n  by simp",
+      "fallback": null,
+      "command": null,
+      "report": {
+       "success": false,
+       "timed_out": false,
+       "proof_open": false,
+       "pending_qed": false,
+       "used_sorry": false,
+       "sorry_lines": [
+        9
+       ],
+       "commands": [
+        {
+         "node_line": 10,
+         "line": 10,
+         "kind": "lemma",
+         "status": "ok",
+         "messages": []
+        },
+        {
+         "node_line": 11,
+         "line": 11,
+         "kind": "by",
+         "status": "failed",
+         "messages": [
+          {
+           "sev": "error",
+           "text": "Failed to apply initial proof method (line 2):\ngoal (1 subgoal):\n 1. rev xs = xs"
+          }
+         ]
+        }
+       ],
+       "subgoals": null
+      },
+      "elapsed_s": 0.004,
+      "cancelled": null
+     }
+    ],
+    "execution_time": 0.1070547103881836
+   }
+  },
+  {
+   "name": "prefix_error",
+   "file_name": "Sem.thy",
+   "text": "theory Sem\n  imports Main\nbegin\n\nlemma a: \"rev (rev xs) = (xs::nat list)\"\n  by simp\n\nlemma b: \"length (xs @ ys) = length ys + length (xs::nat list)\"\n  sorry\n\nlemma c:\n  \"(xs::nat list) @ [] = xs\"\n  by simp\n\nlemma bad: \"rev xs = (xs::nat list)\"\n  by simp\n\nlemma d: \"True\"\n  by simp\n\nend\n",
+   "line": 18,
+   "candidates": [
+    "lemma d: \"True\"\n  by simp"
+   ],
+   "timeout": null,
+   "old": [
+    {
+     "verdict": "prefix_failed",
+     "subgoals": null
+    }
+   ],
+   "answer": {
+    "fallback": null,
+    "host_line": 16,
+    "timeout_s": 30,
+    "timeout_capped": false,
+    "note": null,
+    "candidates": [
+     {
+      "candidate": "lemma d: \"True\"\n  by simp",
+      "fallback": null,
+      "command": null,
+      "report": {
+       "success": false,
+       "timed_out": false,
+       "proof_open": false,
+       "pending_qed": false,
+       "used_sorry": false,
+       "sorry_lines": [
+        9
+       ],
+       "commands": [
+        {
+         "node_line": 16,
+         "line": 16,
+         "kind": "by",
+         "status": "failed",
+         "messages": [
+          {
+           "sev": "error",
+           "text": "Failed to apply initial proof method\\<^here>:\ngoal (1 subgoal):\n 1. rev xs = xs"
+          }
+         ]
+        },
+        {
+         "node_line": 18,
+         "line": 18,
+         "kind": "lemma",
+         "status": "ok",
+         "messages": []
+        },
+        {
+         "node_line": 19,
+         "line": 19,
+         "kind": "by",
+         "status": "ok",
+         "messages": []
+        }
+       ],
+       "subgoals": null
+      },
+      "elapsed_s": 0.002,
+      "cancelled": null
+     }
+    ],
+    "execution_time": 0.1060323715209961
+   }
+  },
+  {
+   "name": "prefix_sorry",
+   "file_name": "Sem.thy",
+   "text": "theory Sem\n  imports Main\nbegin\n\nlemma a: \"rev (rev xs) = (xs::nat list)\"\n  by simp\n\nlemma b: \"length (xs @ ys) = length ys + length (xs::nat list)\"\n  sorry\n\nlemma c:\n  \"(xs::nat list) @ [] = xs\"\n  by simp\n\nlemma bad: \"rev xs = (xs::nat list)\"\n  by simp\n\nlemma d: \"True\"\n  by simp\n\nend\n",
+   "line": 11,
+   "candidates": [
+    "lemma e: True by simp"
+   ],
+   "timeout": null,
+   "old": [
+    {
+     "verdict": "ok",
+     "subgoals": null
+    }
+   ],
+   "answer": {
+    "fallback": null,
+    "host_line": 9,
+    "timeout_s": 30,
+    "timeout_capped": false,
+    "note": null,
+    "candidates": [
+     {
+      "candidate": "lemma e: True by simp",
+      "fallback": null,
+      "command": null,
+      "report": {
+       "success": true,
+       "timed_out": false,
+       "proof_open": false,
+       "pending_qed": false,
+       "used_sorry": false,
+       "sorry_lines": [
+        9
+       ],
+       "commands": [
+        {
+         "node_line": 11,
+         "line": 11,
+         "kind": "lemma",
+         "status": "ok",
+         "messages": []
+        },
+        {
+         "node_line": 11,
+         "line": 11,
+         "kind": "by",
+         "status": "ok",
+         "messages": []
+        }
+       ],
+       "subgoals": null
+      },
+      "elapsed_s": 0.002,
+      "cancelled": null
+     }
+    ],
+    "execution_time": 0.10460162162780762
+   }
+  },
+  {
+   "name": "timeout",
+   "file_name": "Sem.thy",
+   "text": "theory Sem\n  imports Main\nbegin\n\nlemma a: \"rev (rev xs) = (xs::nat list)\"\n  by simp\n\nlemma b: \"length (xs @ ys) = length ys + length (xs::nat list)\"\n  sorry\n\nlemma c:\n  \"(xs::nat list) @ [] = xs\"\n  by simp\n\nlemma bad: \"rev xs = (xs::nat list)\"\n  by simp\n\nlemma d: \"True\"\n  by simp\n\nend\n",
+   "line": 9,
+   "candidates": [
+    "  apply (rule ccontr)+\n  done"
+   ],
+   "timeout": 5,
+   "old": [
+    {
+     "verdict": "timed_out",
+     "subgoals": null
+    }
+   ],
+   "answer": {
+    "fallback": null,
+    "host_line": 8,
+    "timeout_s": 5,
+    "timeout_capped": false,
+    "note": null,
+    "candidates": [
+     {
+      "candidate": "  apply (rule ccontr)+\n  done",
+      "fallback": null,
+      "command": null,
+      "report": {
+       "success": false,
+       "timed_out": true,
+       "proof_open": false,
+       "pending_qed": false,
+       "used_sorry": false,
+       "sorry_lines": [],
+       "commands": [
+        {
+         "node_line": 9,
+         "line": 9,
+         "kind": "apply",
+         "status": "running",
+         "messages": []
+        }
+       ],
+       "subgoals": null
+      },
+      "elapsed_s": 5.477,
+      "cancelled": null
+     }
+    ],
+    "execution_time": 5.638880252838135
+   }
+  },
+  {
+   "name": "fallback_multiline_command",
+   "file_name": "Sem.thy",
+   "text": "theory Sem\n  imports Main\nbegin\n\nlemma a: \"rev (rev xs) = (xs::nat list)\"\n  by simp\n\nlemma b: \"length (xs @ ys) = length ys + length (xs::nat list)\"\n  sorry\n\nlemma c:\n  \"(xs::nat list) @ [] = xs\"\n  by simp\n\nlemma bad: \"rev xs = (xs::nat list)\"\n  by simp\n\nlemma d: \"True\"\n  by simp\n\nend\n",
+   "line": 12,
+   "candidates": [
+    "  \"(xs::nat list) @ [] = xs\"\n  by auto"
+   ],
+   "timeout": null,
+   "old": [
+    {
+     "verdict": "ok",
+     "subgoals": null
+    }
+   ],
+   "answer": {
+    "fallback": "multiline_command",
+    "host_line": null,
+    "timeout_s": 30,
+    "timeout_capped": false,
+    "note": null,
+    "candidates": [],
+    "execution_time": 0.002559185028076172
+   }
+  },
+  {
+   "name": "fallback_no_host",
+   "file_name": "Sem.thy",
+   "text": "theory Sem\n  imports Main\nbegin\n\nlemma a: \"rev (rev xs) = (xs::nat list)\"\n  by simp\n\nlemma b: \"length (xs @ ys) = length ys + length (xs::nat list)\"\n  sorry\n\nlemma c:\n  \"(xs::nat list) @ [] = xs\"\n  by simp\n\nlemma bad: \"rev xs = (xs::nat list)\"\n  by simp\n\nlemma d: \"True\"\n  by simp\n\nend\n",
+   "line": 1,
+   "candidates": [
+    "theory Sem imports Main begin\nlemma x: True by simp"
+   ],
+   "timeout": null,
+   "old": [
+    {
+     "verdict": "ok",
+     "subgoals": null
+    }
+   ],
+   "answer": {
+    "fallback": "no_host",
+    "host_line": null,
+    "timeout_s": 30,
+    "timeout_capped": false,
+    "note": null,
+    "candidates": [],
+    "execution_time": 0.001985311508178711
+   }
+  },
+  {
+   "name": "fallback_host_end",
+   "file_name": "Sem.thy",
+   "text": "theory Sem\n  imports Main\nbegin\n\nlemma a: \"rev (rev xs) = (xs::nat list)\"\n  by simp\n\nlemma b: \"length (xs @ ys) = length ys + length (xs::nat list)\"\n  sorry\n\nlemma c:\n  \"(xs::nat list) @ [] = xs\"\n  by simp\n\nlemma bad: \"rev xs = (xs::nat list)\"\n  by simp\n\nlemma d: \"True\"\n  by simp\n\nend\n",
+   "line": 22,
+   "candidates": [
+    "lemma x: True by simp"
+   ],
+   "timeout": null,
+   "old": [
+    {
+     "verdict": "prefix_failed",
+     "subgoals": null
+    }
+   ],
+   "answer": {
+    "fallback": "host_end",
+    "host_line": null,
+    "timeout_s": 30,
+    "timeout_capped": false,
+    "note": null,
+    "candidates": [],
+    "execution_time": 0.0022139549255371094
+   }
+  },
+  {
+   "name": "fallback_candidate_end",
+   "file_name": "Sem.thy",
+   "text": "theory Sem\n  imports Main\nbegin\n\nlemma a: \"rev (rev xs) = (xs::nat list)\"\n  by simp\n\nlemma b: \"length (xs @ ys) = length ys + length (xs::nat list)\"\n  sorry\n\nlemma c:\n  \"(xs::nat list) @ [] = xs\"\n  by simp\n\nlemma bad: \"rev xs = (xs::nat list)\"\n  by simp\n\nlemma d: \"True\"\n  by simp\n\nend\n",
+   "line": 9,
+   "candidates": [
+    "  by simp\n\nend"
+   ],
+   "timeout": null,
+   "old": [
+    {
+     "verdict": "ok",
+     "subgoals": null
+    }
+   ],
+   "answer": {
+    "fallback": null,
+    "host_line": 8,
+    "timeout_s": 30,
+    "timeout_capped": false,
+    "note": null,
+    "candidates": [
+     {
+      "candidate": "  by simp\n\nend",
+      "fallback": "candidate_command",
+      "command": "end",
+      "report": null,
+      "elapsed_s": null,
+      "cancelled": null
+     }
+    ],
+    "execution_time": 0.003103494644165039
+   }
+  }
+ ]
+}

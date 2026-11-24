@@ -249,9 +249,13 @@ overridable per deployment (`ISABELLE_PARALLEL_PROOFS`, `ISABELLE_SESSION_THREAD
 heap (a Bug 6 contributor). The cap trades single-session latency for pool stability. For
 single-agent workloads (the MCP comparison), the right tuning inverts: one session, all
 cores (`threads=8`) — which is why it's config, not a constant.
-**Correction (audit REPL-8):** `ISABELLE_SESSION_THREADS` is currently a no-op — it is passed
-as a session option, but the poly thread farm is sized at process launch (`ML_OPTIONS`, see
-the ML heap cap in `container_entrypoint.sh`), so only `parallel_proofs` is effective today.
+**Correction (2026-11-24, replaces the audit REPL-8 note that called it a no-op):**
+`ISABELLE_SESSION_THREADS` is effective: the session option `threads` sizes the prover's worker
+farm (the Future scheduler that runs commands, forked proofs and print functions). Measured with
+8 overlay queries (print functions of pri 0) on one session: with `threads=4` they ran 4 at a time
+(8 x 5 s took 10.2 s), with `threads=10` all 8 at once (7.2 s). What it does not cap is the poly
+process's OS thread count (GC and other runtime threads). It is also the number of
+`isabelle_multi_attempt` candidates that run at once in the file session.
 
 ### 1.12 Container is the unit of deployment — and must be native-arch
 
@@ -330,7 +334,7 @@ edit (`discard_last_edit`). Finished theories needed a second path that inserted
 (`Document_Utils.current_state_host`; the command before `end` for the fact queries on a
 finished theory), runs against that command's result state — which IS the current toplevel
 state — and each `writeln_result` becomes an instance-tagged entry in the host's
-`command_results` that `Document_Utils.overlay_query` collects under a per-query budget and
+`command_results` that `Overlay_Queries.overlay_query` collects under a per-query budget and
 then removes the overlay. Nothing is inserted. The LSP-like `sledgehammer_at` (host = the
 command at a line) and the stepwise `sledgehammer` (host = last command) are now one
 operation. `probe_transient` (`diagnostic`, 1.10) stays insertion-based because it runs an

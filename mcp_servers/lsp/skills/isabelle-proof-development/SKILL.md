@@ -14,7 +14,7 @@ Load a tool with ToolSearch when a rule calls for it; its description says how t
 | `isabelle_open` | bind the file to an Isabelle session (once per file) |
 | `isabelle_diagnostic_messages` | re-check the file after an edit: errors, warnings, `still_running` |
 | `isabelle_goal` | read the goals before and after the command at a line |
-| `isabelle_multi_attempt` | test candidate steps at a line on separate sessions, without changing the file; reports for each a `verdict` and the goals it leaves |
+| `isabelle_multi_attempt` | test candidate steps at a line in the file's own session, from the proof state there and without changing the file; reports for each a `verdict` and the goals it leaves |
 | `isabelle_sledgehammer` | search a proof of a goal with external provers |
 | `isabelle_fill_sorries`, `isabelle_fill_status` | run sledgehammer on every `sorry` of the file on the server; collect a running job |
 | `isabelle_query` | run `find_theorems`, `find_consts`, `thm`, `term`, … on the file |
@@ -39,7 +39,9 @@ is `import_heap_failed` with the end of the build log: fix the imported theory i
    `have … sorry`, `next`, `qed`) need no test. To explore the goals a method leaves, you may also
    write the method followed by `sorry` into the file and read them with `isabelle_goal`; check the
    file right after, and treat the method like any step under rules 4 and 5. Give all the candidates for one position in
-   one call: they run in parallel.
+   one call: they run in parallel (4 at once, the others wait). Give a `line` where a command
+   starts, below the theory header, and candidates without `end`: otherwise they are checked on a
+   fresh session instead (the result's `checked_on` says so), which takes much longer.
 4. A step must finish within 10 seconds (`timeout` 10), unless the project's skill sets another limit.
 5. A result with `still_running` means a command is still running after the 30 s a check waits.
    While its `running_for_s` is below the step's limit (rule 4), check again; once it exceeds the

@@ -265,14 +265,14 @@ class Repl_Session(session_manager: Session_Manager, initial_thys: List[String] 
   def sledgehammer_at_command(index: Int, subgoal: Int, timeout_s: Int, max_proofs: Int, provers: String): String =
     current_thy_info match {
       case Some(_) =>
-        Document_Utils.sledgehammer_at_command_json(session, current_thy_node_name, index, subgoal, timeout_s, max_proofs, provers)
+        Document_Utils.sledgehammer_at_command_json(session, overlays, current_thy_node_name, index, subgoal, timeout_s, max_proofs, provers)
       case None    => Json_Reports.line_query_not_found("no theory entered")
     }
 
   def sledgehammer_at(line: Int, subgoal: Int, timeout_s: Int): String =
     current_thy_info match {
       case Some(_) =>
-        Document_Utils.sledgehammer_at_json(session, current_thy_node_name, line, subgoal, timeout_s)
+        Document_Utils.sledgehammer_at_json(session, overlays, current_thy_node_name, line, subgoal, timeout_s)
       case None    => Json_Reports.line_query_not_found("no theory entered")
     }
 
@@ -280,22 +280,36 @@ class Repl_Session(session_manager: Session_Manager, initial_thys: List[String] 
    *  node's last non-ignored command (its result state IS the current toplevel
    *  state); with `skip_end` the trailing theory `end` is skipped. None when no
    *  theory is entered or the node has no command yet. See
-   *  Document_Utils.current_state_host. */
+   *  Overlay_Queries.current_state_host. */
   def current_state_host(skip_end: Boolean): Option[Command] =
     current_thy_info.flatMap(_ =>
-      Document_Utils.current_state_host(session, current_thy_node_name, skip_end))
+      Overlay_Queries.current_state_host(session, current_thy_node_name, skip_end))
+
+  /** Host for queries that do not read the state (the memory probe): the first command
+   *  whose evaluation is over. See Overlay_Queries.first_finished_host. */
+  def first_finished_host: Option[Command] =
+    current_thy_info.flatMap(_ => Overlay_Queries.first_finished_host(session, current_thy_node_name))
+
+  /** The overlays of this session's document (Overlay_Registry): every overlay query
+   *  joins and leaves it on its own. */
+  val overlays: Overlay_Registry = new Overlay_Registry
+
+  /** Run `f` on the PIDE session and the current node; None when no theory is entered.
+   *  For Backend_Attempts, which drives several overlays itself. */
+  def with_current_node[A](f: (Headless.Session, Document.Node.Name) => A): Option[A] =
+    current_thy_info.map(_ => f(session, current_thy_node_name))
 
   /** Run a registered Query_Operation as a temporary overlay on `host` in the
    *  current node and collect its instance-tagged results: (finished-in-budget,
    *  content lines, error lines). No document edit; the overlay is always removed.
-   *  See Document_Utils.overlay_query. */
+   *  See Overlay_Queries.overlay_query. */
   def overlay_query(
       host: Command,
       print_fn: String,
       args: List[String],
       budget_ms: Long
   ): (Boolean, List[String], List[String]) =
-    Document_Utils.overlay_query(session, current_thy_node_name, host, print_fn, args, budget_ms)
+    Overlay_Queries.overlay_query(session, overlays, current_thy_node_name, host, print_fn, args, budget_ms)
 
   /** True when the current document ends with theory `end` (last non-ignored command
    *  has span `end`). A successful `end` implies NO proof is open, and after `end`

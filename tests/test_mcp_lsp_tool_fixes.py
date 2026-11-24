@@ -36,11 +36,10 @@ def _fresh(monkeypatch):
     from mcp_servers.lsp import app as lsp_app
     from mcp_servers.lsp import server as lsp_server
 
-    monkeypatch.setattr(Config, "SCRATCH_SPARE", 0)
     pool = lsp_server.pool
     fake = GoalFakeClient()
     for name, value in [("_bindings", {}), ("_scratch", {}), ("_scratch_counts", {}),
-                        ("_spare_pending", {}), ("_client", fake)]:
+                        ("_client", fake)]:
         monkeypatch.setattr(pool, name, value)
     return lsp_app, fake
 

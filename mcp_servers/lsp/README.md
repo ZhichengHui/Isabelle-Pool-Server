@@ -2,8 +2,9 @@
 
 An MCP server for agent-driven Isabelle development over *files*, in the spirit
 of lean-lsp-mcp: tools take a `file_path` (never a session id), the file is
-re-synced from disk before every query, and execution happens on warm scratch
-sessions — never on the file's session. Built strictly on top of
+re-synced from disk before every query. Candidate proofs (`isabelle_multi_attempt`) run
+in the file's own session as overlay queries at the line's proof state — the file and its
+document are never edited; `isabelle_run_code` runs on a scratch session. Built strictly on top of
 `PoolAsyncClient` (no server-core edits); needs the Isabelle Pool Server HTTP
 server running (`docker compose up -d`, `python -m server.app.main` in the
 container, port 8000).
@@ -81,7 +82,7 @@ Read-only (each syncs first):
 | `isabelle_local_facts(file_path)` / `isabelle_global_facts(file_path, limit?)` | Proof-context vs theory-level facts |
 | `isabelle_hover_info(file_path, line, column)` | Entity kind + type/statement |
 | `isabelle_definition(file_path, line, column)` | Def positions: file targets (heap/distribution sources) or in-node line ranges (entities defined in the file itself) |
-| `isabelle_sledgehammer(file_path, line?, subgoal?, timeout_s?)` | Tip goal (no `line`) or positioned at `line` (+subgoal) |
+| `isabelle_sledgehammer(file_path, line?, subgoal?, timeout_s?)` | Tip goal (no `line`) or positioned at `line` (+subgoal), in the file session; `timeout_s` default 30, capped at 120 (the server withdraws the query 15 s after it) |
 | `isabelle_fill_sorries(file_path, timeout_s?, max_total_s?, patience_s?)` | The server runs sledgehammer on every `sorry` of the file (one job per file, `timeout_s` per sorry, `max_total_s` per job) and returns `patched_text` + per-sorry results, ETA and queue position; after `patience_s` (default 240) it returns the partial state with `continuing: true` while the job keeps running server-side |
 | `isabelle_fill_status(file_path)` / `isabelle_fill_cancel(file_path)` | Collect a continuing job (same result shape; polling keeps the session alive) / stop it (the step in flight ends within its own budget; proofs found so far stay in `patched_text`) |
 | `isabelle_checkpoint(file_path)` / `isabelle_restore(file_path, checkpoint_id)` / `isabelle_rollback(file_path)` | Snapshot machinery on the file session |
@@ -91,21 +92,13 @@ Scratch execution (never touch the file session; warm pool keyed by
 task_group/heap/imports/field, `ISABELLE_MCP_LSP_SCRATCH_POOL_SIZE`):
 | Tool | What it does |
 |---|---|
-| `isabelle_multi_attempt(file_path, line, candidates, timeout?)` | File prefix before `line` + each candidate, verified concurrently on scratch sessions (bounded by `ISABELLE_MCP_LSP_MAX_PARALLEL`); `line` is the first line of the text the candidate REPLACES (it takes the place of that line and every line after it; 1 to the line count + 1, the last value appends after the end of the file, else an error); the result is indented JSON; per-candidate `verdict` (`ok` / `failed` / `timed_out` / `used_sorry` / `prefix_failed` / `error`: the one field to decide on), success/proof_open/pending_qed, `used_sorry` of the candidate itself (`prefix_used_sorry` when the text before `line` has one), `failed` commands with complete error messages (candidate-relative lines; `prefix_failed` for the text before `line`) and, for an open proof, the remaining `subgoals` (the goals as Isabelle prints them, one array element per line) |
+| `isabelle_multi_attempt(file_path, line, candidates, timeout?)` | Each candidate checked in the FILE'S OWN SESSION (`attempt_tools.py` → `POST /api/v1/sessions/{id}/attempt`): it continues from the state after the last command that ends before `line`, so no session is started and the file before `line` is not checked again; as many candidates run at once as the session has worker threads (`ISABELLE_SESSION_THREADS`, default 4), the rest wait; `timeout` per candidate (default 30 s, server cap 300 s: a larger value runs at the cap and the result carries `timeout_note`). `line` is the first line of the text the candidate REPLACES (it takes the place of that line and every line after it; 1 to the line count + 1, the last value appends after the end of the file, else an error); the result is indented JSON; per-candidate `verdict` (`ok` / `failed` / `timed_out` / `used_sorry` / `prefix_failed` / `error`: the one field to decide on), success/proof_open/pending_qed, `used_sorry` of the candidate itself (`prefix_used_sorry` when the text before `line` has one), `failed` commands with complete error messages (candidate-relative lines; `prefix_failed` for the text before `line`), for an open proof the remaining `subgoals` (the goals as Isabelle prints them, one array element per line), `elapsed_s` (the candidate's own running time) and `cancelled_memory` (stopped by the server's memory protection; verdict `error`). Checked on a fresh scratch session instead (as before 2026-11-24, `checked_on` says so) only when `line` is inside a command, in the theory header or after `end`, or the candidate contains `end`, `theory` or a file-loading command |
 | `isabelle_run_code(chunk, imports?, task_group?, heap_session?, timeout?)` | Independent snippet on a scratch session (own `theory` header or body of a scratch theory importing `imports`, default Main) |
 
-Spare scratch sessions (`scratch_spare.py`, `ISABELLE_MCP_LSP_SCRATCH_SPARE`, default 4, 0 = off):
-after a file is first bound, and again after each `isabelle_multi_attempt`, the MCP prepares in
-the background min(`..._SCRATCH_SPARE`, `..._MAX_PARALLEL`) idle scratch sessions for the file's
-context (within `..._SCRATCH_POOL_SIZE`), already loaded with the file's text. The candidates of
-a multi_attempt run in parallel, so the call is as slow as its slowest candidate: spares help only
-if every candidate finds one, which is why as many are kept as candidates can run at once
-(measured on an AutoCorrode file: 1 candidate with a spare 0.4 s, without 40 s; 2 candidates with
-only 1 spare still 39 s). A candidate on a spare neither waits for a new session
-nor checks the prefix from the start (its load takes the server's incremental path). The context
-comes from the file's own header, so nothing is configured per heap. Each spare is a held Isabelle
-session (memory; the memory reminder closes idle ones first). A refused or failed preparation
-(memory pressure, the pool at its cap) only means fewer spares.
+Scratch sessions (`isabelle_run_code`, the multi_attempt fallback) are started on first use and
+kept warm per context (`..._SCRATCH_POOL_SIZE`); none are prepared in advance (the spare
+sessions of `scratch_spare.py`, 4 per file, were removed with the move of multi_attempt into the
+file session, 2026-11-24).
 
 Heap pool:
 | Tool | What it does |
@@ -129,10 +122,9 @@ parser (client wrapper: `async_client.parse_theory_header`).
 | `..._FIELD_FROM_IMPORTS` | false | start on the image the server's header parse suggests for the file's dotted imports (`suggested_field`: the largest distribution image named) instead of `..._FIELD`; an image the server lacks fails the open until it is built: prebuild the big ones |
 | `..._HTTP_TIMEOUT` | 600 | httpx timeout (s) |
 | `..._LOAD_TIMEOUT` | 30 | load_document sync budget (s); see `still_running` above |
-| `..._ATTEMPT_TIMEOUT` | 180 | per-candidate/run_code budget (s) |
-| `..._MAX_PARALLEL` | 4 | multi_attempt fan-out cap |
-| `..._SCRATCH_POOL_SIZE` | 4 | warm scratch sessions per context |
-| `..._SCRATCH_SPARE` | 4 | idle scratch sessions kept ready per context, loaded with the file: min(this, `MAX_PARALLEL`) (0 = off) |
+| `..._ATTEMPT_TIMEOUT` | 30 | default per-candidate time limit of multi_attempt (server cap 300) and run_code budget (s); on the scratch fallback it bounds the whole text |
+| `..._MAX_PARALLEL` | 4 | candidates at once on the scratch fallback (in the file session the server decides) |
+| `..._SCRATCH_POOL_SIZE` | 4 | warm scratch sessions per context (run_code, multi_attempt fallback) |
 | `..._CLOSE_DESTROYS` | false | `isabelle_close` destroys (teardown) instead of warm-releasing |
 | `..._FILL_TIMEOUT_S` / `..._FILL_MAX_TOTAL_S` | 30 / 600 | fill_sorries: sledgehammer budget per `sorry` / wall budget per job (server defaults `ISABELLE_FILL_*`) |
 | `..._FILL_PATIENCE_S` / `..._FILL_POLL_S` | 240 / 3 | how long `isabelle_fill_sorries` waits before returning `continuing: true` (keep ≤ the MCP client's tool timeout − 60) / poll interval |
@@ -169,7 +161,7 @@ through ssh, by contrast, the process ends with the connection and every open fi
 
 `server.py` is the import point for the shared objects (`mcp`, `pool`, `TOOLS`, the `tool` /
 `synced_tool` decorators); `app.py` holds the file/scratch/heap tools and `main()`,
-`memory_tools.py` the memory tools, `fill_tools.py` the fill_sorries tools. New code imports from `server.py`, not through `app.py`
+`attempt_tools.py` isabelle_multi_attempt, `memory_tools.py` the memory tools, `fill_tools.py` the fill_sorries tools. New code imports from `server.py`, not through `app.py`
 (which only re-exports for compatibility).
 
 ## Memory protocol

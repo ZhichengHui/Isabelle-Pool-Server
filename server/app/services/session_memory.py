@@ -31,6 +31,7 @@ from server.app.core.logging import get_logger
 from server.app.services.internal_models import SessionStatus
 from server.app.services.memory_monitor import proc_matches, read_starttime
 from server.app.services.session import _Isabelle_Session
+from server.app.services.session_attempt import SessionAttemptMixin
 from server.repl.src.python import process_tree
 
 logger = get_logger(__name__)
@@ -286,7 +287,9 @@ class SessionFillMixin:  # pylint: disable=too-few-public-methods
             self._release_request()
 
 
-class MemoryAwareSession(SessionMemoryMixin, SessionFillMixin, _Isabelle_Session):
+class MemoryAwareSession(
+    SessionMemoryMixin, SessionFillMixin, SessionAttemptMixin, _Isabelle_Session
+):
     """The session class the manager creates: a plain session + memory facts."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:

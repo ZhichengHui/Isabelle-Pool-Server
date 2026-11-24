@@ -73,7 +73,6 @@ class FileBinding:
     # lower bound of when it started: PIDE keeps an unchanged command running
     # across incremental syncs).
     running_since: Dict[Tuple[Any, Any], float] = field(default_factory=dict)
-    spare_scheduled: bool = False  # scratch_spare.schedule_for_binding ran for this binding
     # shown once in the next result (server.py): e.g. that the file was reopened because an
     # imported theory changed (import_watch.refresh)
     heap_note: Optional[str] = None
@@ -99,8 +98,6 @@ class LspPool(GymClientMixin):
         self._stale_generations: set = set()
         self._scratch_counts: Dict[Tuple, int] = {}
         self._scratch_lock = asyncio.Lock()
-        self._spare_pending: dict = {}  # scratch_spare.py: context -> spares in preparation
-        self._spare_tasks: set = set()  # scratch_spare.py: its background tasks
         self._retire_tasks: set = set()  # deferred closes of busy dropped sessions
         # What this process holds on the server (bindings + scratch; session and
         # lease kept here, never shown to the agent) — plan §2.C.
