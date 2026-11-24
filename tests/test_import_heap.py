@@ -55,6 +55,10 @@ def test_any_order_of_the_same_theories_gives_one_name_and_one_root(state):
     # a theory named twice is one theory
     twice = ih.plan(theories + [str(proj / "B")], "HOL", dirs)
     assert (twice.name, twice.root_text) == (plans[0].name, plans[0].root_text)
+    # the wrapper imports in the request's order (the later import wins a shared short name)
+    back = ih.plan(theories[::-1], "HOL", dirs)
+    assert back.theories == [f"{back.name}.C", f"{back.name}.B",
+                             "HOL-Library.Multiset", "S_ih2.U", "S_ih.T"]
 
 
 def test_siblings_and_a_project_session_build_on_that_session(state):

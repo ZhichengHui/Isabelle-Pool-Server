@@ -116,7 +116,10 @@ def plan(theories: Optional[List[str]], field: str, session_dirs: Optional[List[
         text = (f'session {name} in "{master}" = "{parent}" +\n'
                 + (f"  sessions {' '.join(others)}\n" if others else "")
                 + "  theories\n" + "".join(f"    {n}\n" for n in names))
-        wrapper = [f"{name}.{n}" for n in names] + [t for t in theories if not t.startswith("/")]
+        # the wrapper keeps the request's order (the later import wins a shared short name,
+        # session_manager_helpers._normalize_theories); it is not part of the name or the ROOT
+        wrapper = ([f"{name}.{os.path.basename(t)}" for t in theories if t.startswith("/")]
+                   + [t for t in theories if not t.startswith("/")])
         watch = sorted(str(p) for p in Path(master).glob("*.thy"))
         scan = [(master, False)] + [(own[s], True) for s in own_used]
         return Plan(name, [root_dir] + dirs, wrapper, root_dir, text, watch, scan)
