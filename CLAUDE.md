@@ -303,6 +303,15 @@ ISABELLE_MEMORY_PRESSURE_THRESHOLD=85.0 # Block new sessions above this used% (d
 ISABELLE_MEMORY_MIN_AVAILABLE_MB=512    # Also block if available memory below this (default 512)
 ISABELLE_MEMORY_WARNING_THRESHOLD=70.0  # X-Memory-State header: warning from this used% (critical = refusing)
 ISABELLE_MEMORY_PROBE_MIN_INTERVAL_S=15 # Per-session ML memory probe at most once per interval (request path)
+ISABELLE_MEMORY_GUARD_INTERVAL_S=5      # Memory guard (services/memory_guard.py): every 5 s, a session whose ML heap
+ISABELLE_MEMORY_GUARD_HEAP_FRACTION=0.75 #  in use exceeds 75% of --maxheap has its running multi_attempt candidates
+                                        #  cancelled (cancelled_memory), else its running file commands (error_kind
+                                        #  "memory"); the heap comes from Isabelle's runtime statistics, no prover worker
+ISABELLE_CGROUP_SCOPES=auto             # auto: every session prover (process_policy) and every isabelle build in its own
+ISABELLE_SESSION_MEMORY_MAX=24G         #  systemd scope (slice ips_pool_<port>.slice) when `systemd-run --user` works at
+ISABELLE_BUILD_MEMORY_MAX=32G           #  start-up, else a warning and no scope; off: never (services/cgroup_scope.py)
+ISABELLE_ML_MAXHEAP_MB=16384            # Poly/ML --maxheap written by ensure_settings.sh (x86_64_32: up to 32 GiB)
+ISABELLE_MAX_CONCURRENT_BUILDS=4        # ONE bound for heap-pool and import-heap builds together
 ISABELLE_MEMORY_FACTS_LIST_CAP=50       # Max evictable/leased rows in memory 503 bodies and GET /api/v1/memory
 ISABELLE_MEMORY_ERROR_PATTERNS="Out of memory|Run out of store|exception Size raised"  # error_kind="memory" matches
 ISABELLE_MEMORY_SESSION_ESTIMATES="HOL=2048,HOL-Library=3072,HOL-Analysis=4096"  # budget admission: new-session size by field

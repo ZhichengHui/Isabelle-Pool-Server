@@ -58,6 +58,9 @@ class Repl_Session(session_manager: Session_Manager, initial_thys: List[String] 
 
   private def session: Headless.Session = session_data.session
 
+  /** The PIDE session (Backend_Memory reads its runtime statistics). */
+  def pide_session: Headless.Session = session
+
   /** Isabelle session phase as text (`Ready`, `Terminated(...)`, ...): the
    *  prover-level sign, if any, that the ML process is gone. */
   def phase_string: String = session.phase.toString

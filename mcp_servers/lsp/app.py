@@ -147,6 +147,10 @@ async def isabelle_diagnostic_messages(file_path: str, severity: Optional[str] =
         "proof_open": rep.get("proof_open"),
         "used_sorry": _file_used_sorry(rep),
     }
+    if rep.get("error_kind"):  # "memory" (memory guard) / "prover_died" (hard limit)
+        result["error_kind"] = rep["error_kind"]
+        if rep.get("error"):
+            result["error"] = rep["error"]
     if not rep:
         result["note"] = "no report yet — call isabelle_sync first"
     return _j(result)

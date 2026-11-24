@@ -20,7 +20,7 @@
 #
 # Idempotent: an entry already present (including a hand-tuned one) is left
 # untouched — operator tuning wins. Knobs:
-#   ISABELLE_ML_MAXHEAP_MB    cap in MB (default 9216)
+#   ISABELLE_ML_MAXHEAP_MB    cap in MB (default 16384)
 #   ISABELLE_SERVER_LOG_DIR   GC log directory (default logs/; a relative path
 #                             is resolved against the repo root)
 #   ISABELLE_HOME             Isabelle installation (default /opt/isabelle;
@@ -35,7 +35,7 @@ ISABELLE="${ISABELLE_HOME:-/opt/isabelle}/bin/isabelle"
 [[ -x "$ISABELLE" ]] || ISABELLE="$(command -v isabelle || true)"
 [[ -n "$ISABELLE" ]] || { echo "ensure_settings: isabelle not found (set ISABELLE_HOME or put it on PATH)" >&2; exit 1; }
 
-MAXHEAP_MB="${ISABELLE_ML_MAXHEAP_MB:-9216}"
+MAXHEAP_MB="${ISABELLE_ML_MAXHEAP_MB:-16384}"
 LOG_DIR="${ISABELLE_SERVER_LOG_DIR:-logs}"
 [[ "$LOG_DIR" = /* ]] || LOG_DIR="${REPO_ROOT}/${LOG_DIR}"
 

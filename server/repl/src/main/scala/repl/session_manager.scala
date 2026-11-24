@@ -207,6 +207,19 @@ class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_c
   private val session_threads_opt: String =
     sys.env.getOrElse("ISABELLE_SESSION_THREADS", "4")
 
+  // Prefix of the session's ML process command line (Isabelle system option
+  // `process_policy`, ml_process.scala), e.g. `systemd-run --user --scope -p MemoryMax=24G
+  // --unit={unit}`: every session's prover runs in its own cgroup (efficiency plan D3).
+  // `{unit}` becomes `ips-sess-<random uuid>`. Set by the Python server when its start-up
+  // check found `systemd-run --user` usable (services/cgroup_scope.py); empty = no prefix.
+  private val session_process_policy: String =
+    sys.env.getOrElse("ISABELLE_SESSION_PROCESS_POLICY", "").trim.nn
+
+  private def process_policy_option(): List[(String, String)] =
+    if (session_process_policy.isEmpty) Nil
+    else List("process_policy" ->
+      session_process_policy.replace("{unit}", "ips-sess-" + UUID.random_string()).nn)
+
   private def create_new_session_internal(initial_thys: List[String], field: String = "HOL", dirs: List[String] = Nil): Session_Data = {
     val session_delay_options_to_minimise =
       List("headless_consolidate_delay", "headless_check_delay", "headless_nodes_status_delay")
@@ -215,6 +228,7 @@ class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_c
       ("show_states", show_states.toString) ::
         ("parallel_proofs", parallel_proofs_opt) ::
         ("threads", session_threads_opt) ::
+        process_policy_option() :::
         session_delay_options_to_minimise.map(option_name => (option_name, min_delay))
     val session_options = session_option_pairs.map { case (name, value) => s"${name}=${value}" }
     if (closed) error("Session manager is shut down: no new session")
@@ -230,6 +244,7 @@ class Session_Manager(show_states: Boolean, enable_cache: Boolean = false, max_c
       error(s"Session manager was shut down while session $session_id started; session stopped")
     }
     val session = server.the_session(session_id)
+    Heap_Watch.attach(session)
     // A failed initial load (theory error, interrupt, shutdown) must not leave the
     // started prover behind: the caller never receives a handle to it.
     try {

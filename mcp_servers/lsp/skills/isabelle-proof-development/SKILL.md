@@ -46,7 +46,9 @@ is `import_heap_failed` with the end of the build log: fix the imported theory i
 5. A result with `still_running` means a command is still running after the 30 s a check waits.
    While its `running_for_s` is below the step's limit (rule 4), check again; once it exceeds the
    limit, replace the step at the smallest listed line with a tested alternative or `sorry` and
-   check again, before anything else.
+   check again, before anything else. A candidate with `cancelled_memory`, or a command whose error
+   says the server's memory guard stopped it, used too much memory: replace it the same way, never
+   retry it unchanged.
 6. The proof is done when `isabelle_diagnostic_messages` reports no errors and no `still_running`
    and `grep` finds no `sorry` in the file. Then run the task's batch build once, saving its output
    with `tee`. Use a batch build only for this final check and, when a change reaches many theories,

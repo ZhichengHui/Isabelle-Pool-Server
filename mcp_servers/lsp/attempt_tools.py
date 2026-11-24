@@ -106,8 +106,9 @@ def _from_session(entry: Dict[str, Any], line: int, budget: float) -> Dict[str, 
     result["cancelled_memory"] = cancelled == "memory"
     if cancelled:
         result["verdict"] = "error"
-        result["error"] = ("cancelled by the server's memory protection: the prover's heap "
-                           "is close to its limit" if cancelled == "memory"
+        result["error"] = ("cancelled by the server's memory guard: while it ran, the "
+                           "session's ML heap in use exceeded 75% of its limit; use a step that "
+                           "needs less memory, do not retry it unchanged" if cancelled == "memory"
                            else f"cancelled: {cancelled}")
     return result
 

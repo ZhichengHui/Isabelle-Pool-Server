@@ -36,7 +36,11 @@ isabelle_fill_sorries runs it on every sorry of the file in the background.
 - Blocked checks: a check waits at most {Config.LOAD_TIMEOUT:.0f} s; if commands are still running \
 then, the result carries still_running with their lines.
 - Inspection: isabelle_query (thm, term, find_theorems, ...), local and global facts, definitions, \
-hover information; checkpoints; memory tools (isabelle_memory_status, isabelle_release_idle)."""
+hover information; checkpoints; memory tools (isabelle_memory_status, isabelle_release_idle).
+- Memory limits: a candidate or command that makes the session's ML heap exceed 75% of its limit is \
+cancelled (candidates: cancelled_memory; commands: an error saying the memory guard stopped it); a \
+session whose processes exceed their hard limit is ended (prover_died) and the next call opens the \
+file again. Change such a step; do not retry it unchanged."""
 
 mcp = FastMCP(
     "isabelle-pool-server-lsp", instructions=_INSTRUCTIONS, host=Config.HOST, port=Config.PORT,

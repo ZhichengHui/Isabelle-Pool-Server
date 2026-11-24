@@ -20,6 +20,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from server.app.core.config import Memory
 from server.app.core.logging import get_logger
+from server.app.services import cgroup_scope
 from server.repl.src.python import process_tree
 
 logger = get_logger(__name__)
@@ -419,7 +420,10 @@ class MemoryMonitor:  # pylint: disable=too-many-instance-attributes
             if used is not None:
                 self.last_source = SOURCE_CGROUP_V1
         if used is not None:
-            return max(0, used - self._read_inactive_file())
+            # Session provers and builds in their own scopes (cgroup_scope.py) are outside
+            # the server's cgroup: add this server's slice (0 when scopes are off).
+            outside = cgroup_scope.slice_used_bytes() if self.cgroup_dir else 0
+            return max(0, used - self._read_inactive_file()) + outside
         host_used = _host_mem_used_bytes()
         if host_used is not None:
             self.last_source = SOURCE_HOST

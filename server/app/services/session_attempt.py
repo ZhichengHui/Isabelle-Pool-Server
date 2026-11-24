@@ -88,7 +88,9 @@ def _candidate_report(line: int, prefix: Dict[str, Any], cand: Dict[str, Any]) -
         cand_ok = False
         commands.append({"node_line": line, "line": line, "kind": None, "status": "failed",
                          "messages": [{"sev": "error", "text": error}]})
-    timed_out = bool(cand.get("timed_out")) or not prefix.get("settled", True)
+    # a candidate the memory guard cancelled was stopped, not timed out (cancel_attempts)
+    timed_out = ((bool(cand.get("timed_out")) and not cand.get("cancelled"))
+                 or not prefix.get("settled", True))
     success = (not timed_out and bool(prefix.get("all_ok")) and cand_ok
                and bool(cand.get("finished")))
     proof_open = success and bool(cand.get("in_proof"))

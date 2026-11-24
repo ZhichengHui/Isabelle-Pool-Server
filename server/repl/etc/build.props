@@ -12,6 +12,7 @@ sources = \
   src/main/scala/repl/backend_chunk_ops.scala \
   src/main/scala/repl/backend_file_ops.scala \
   src/main/scala/repl/backend_attempts.scala \
+  src/main/scala/repl/backend_memory.scala \
   src/main/scala/repl/overlay_registry.scala \
   src/main/scala/repl/repl_backend_gateway.scala \
   src/main/scala/repl/repl_output.scala \

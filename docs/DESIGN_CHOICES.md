@@ -147,7 +147,16 @@ the cgroup stays the truth for the total; on top of it:
   statistics; the server reads the process's resident size (+ sledgehammer children) from `/proc`
   once per sweep and keys "prover alive" on pid + start time. Isabelle itself runs an
   `ML_Statistics.monitor` poly next to every session, so `Session.runtime_statistics` already
-  streams the same heap numbers — a possible zero-overlay source later.
+  streams the same heap numbers — used since stage D (2026-11-24) by the memory guard
+  (`ReplBackend.ml_heap`, backend_memory.scala), which must read the heap while every worker
+  of the prover is busy (the overlay probe needs a worker).
+- *Soft and hard limits per session (stage D, 2026-11-24):* the guard cancels the session's
+  candidates, else its running commands, when the heap in use (`size_heap -
+  size_heap_free_last_GC`; `size_heap` alone is the reserved heap, which does not shrink) exceeds
+  75% of `--maxheap` (16384); a systemd scope per prover (`process_policy`, `MemoryMax=24G`)
+  is the hard limit, whose kill the existing death check reports as `prover_died`. External
+  provers of sledgehammer are started by the gateway JVM (`bash_process`), not by the prover, so
+  they are not in the session's scope; the sledgehammer slots bound their total.
 - *Facts, not advice (D4):* every 503 body carries an `error` key with the structured facts,
   every response an `X-Memory-State` tier (cached, no I/O), `GET /api/v1/memory` the full picture;
   results carry `error_kind` (`memory` from the ML out-of-memory text, `prover_died` from the

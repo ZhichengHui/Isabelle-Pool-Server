@@ -141,6 +141,15 @@ curl http://localhost:8000/            # version, gateway_alive, active/busy ses
   `error` key (`memory_pressure` with the same facts, `pool_full`, `gateway_unavailable`); step /
   chunk / document results carry `error_kind` (`memory` | `prover_died` | null). Leased sessions
   are never evicted — clients are reminded instead (see §4).
+- Memory limits per session (efficiency plan stage D): each prover runs with `--maxheap 16384`; a
+  memory guard checks every 5 s the ML heap in use of every session (Isabelle's runtime statistics,
+  read without the prover's workers) and above 75% of the cap cancels the session's running
+  `isabelle_multi_attempt` candidates (reported `cancelled_memory`) or, with none running, its
+  running file commands (the next document report carries `error_kind: "memory"`). Where
+  `systemd-run --user` works at start-up, every prover runs in its own cgroup scope
+  (`MemoryMax=24G`; a prover killed there is reported `prover_died`) and every `isabelle build` in
+  one with `MemoryMax=32G`; heap-pool and import-heap builds share one bound of 4 at once. Without
+  `systemd-run` the server logs a warning and runs without scopes.
 - Sledgehammer: `POST …/sledgehammer` and `…/sledgehammer_at` report `success` / `found` only when a
   proof was found (a `Try this:` line) and expose `outcome` (`proved` | `none` | `timeout` | `error`) and
   `method` (the first suggestion, timing cut); "No proof found" used to count as success. `POST …/fill_sorries`
