@@ -91,6 +91,11 @@ def test_siblings_in_two_directories_are_left_as_they_are(state):
 
 
 # ----- the builder -----
+# A test that leaves a build running ends it with BUILDER.cancel_all(), as the server's shutdown
+# does (main.py), before its event loop ends. Leaving it to asyncio.run hangs (Python 3.12):
+# asyncio.run cancels every task at once, also asyncio's own task that finishes starting the
+# subprocess (_connect_pipes), so the build task, cancelled inside create_subprocess_exec, waits
+# forever for an exit notification that stays queued behind that never-run task.
 
 def _fake_isabelle(tmp_path, fail_marker):
     """`isabelle build -b -v -d … NAME`: prints like the real one, fails while `fail_marker`
@@ -175,6 +180,7 @@ def test_a_failure_is_reported_until_a_source_changes(state, monkeypatch):
         st = os.stat(proj / "B.thy")
         os.utime(proj / "B.thy", ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))  # the fix
         assert (await ih.BUILDER.ensure(p))["status"] == "building"
+        await ih.BUILDER.cancel_all()
 
     asyncio.run(run())
 
@@ -193,7 +199,40 @@ def test_theories_that_run_code_are_not_built(state, monkeypatch):
     assert out["status"] == "failed" and "B.thy" in out["log_tail"] and "'ML'" in out["log_tail"]
     assert p.name not in ih.BUILDER._jobs  # nothing was run
     monkeypatch.setattr(Server, "ALLOW_ML_COMMANDS", True)
-    assert asyncio.run(ih.BUILDER.ensure(p))["status"] == "building"
+
+    async def allowed():
+        out = await ih.BUILDER.ensure(p)
+        await ih.BUILDER.cancel_all()
+        return out
+
+    assert asyncio.run(allowed())["status"] == "building"
+
+
+def test_shutdown_right_after_a_build_starts_ends_it(state, monkeypatch):
+    """cancel_all (server shutdown) in the same step as the build's start: it returns at once
+    and no build process is left (the build may be cancelled while its process is starting)."""
+    proj = _project(state)
+    p = ih.plan([str(proj / "B")], "HOL", [])
+    pids = state / "pids"
+    script = state / "slow-isabelle"
+    script.write_text(f'#!/bin/bash\necho $$ >> "{pids}"\nsleep 60\n')
+    script.chmod(0o755)
+    ih.BUILDER.isabelle = str(script)
+    monkeypatch.setattr(image_select, "images", lambda: {})
+    monkeypatch.setattr(image_select, "current", lambda name, imgs, dirs: False)
+
+    async def run(delay):
+        assert (await ih.BUILDER.ensure(p))["status"] == "building"
+        await asyncio.sleep(delay)
+        await asyncio.wait_for(ih.BUILDER.cancel_all(), 30)
+        assert ih.BUILDER._jobs[p.name].finished_at is not None
+
+    for delay in (0, 0.5):  # while the process starts; while it runs
+        ih.BUILDER._jobs.clear()
+        asyncio.run(run(delay))
+    for pid in (pids.read_text().split() if pids.exists() else []):  # = the build's group id
+        with pytest.raises(ProcessLookupError):
+            os.killpg(int(pid), 0)
 
 
 def test_prepare_answers_building_then_the_built_inputs(state, monkeypatch):
